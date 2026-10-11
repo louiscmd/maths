@@ -10,6 +10,8 @@
   "type": "module",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
-    "express": "^4.22.3"
+    "@upstash/redis": "^1.39.0",
+    "express": "^4.22.3",
+    "mathjs": "^15.2.0"
   }
 }
