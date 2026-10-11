@@ -487,7 +487,7 @@ function celebrate(r) {
   levelUp(r.reward.levelUp);
 }
 
-// XP bar that slides in after a good answer: fills live, counts up, then leaves when its countdown line runs out.
+// XP bar that slides up from the bottom after a good answer: fills live, counts up, then leaves after ~5 s (countdown line).
 let xpfxTimer = null;
 const levelIndex = (xp) => S.levels.reduce((a, l, i) => (xp >= l.xp ? i : a), 0);
 function pctIn(xp, i) { const L = S.levels[i], N = S.levels[i + 1]; return N ? Math.min(100, ((xp - L.xp) / (N.xp - L.xp)) * 100) : 100; }
@@ -495,7 +495,7 @@ function xpBurst(from, to, note = "") {
   if (!(to > from)) return;
   let el = $("#xpfx");
   if (!el) { el = document.createElement("div"); el.id = "xpfx"; document.body.append(el); }
-  const i0 = levelIndex(from), i1 = levelIndex(to), N = S.levels[i0 + 1], LIFE = 3200;
+  const i0 = levelIndex(from), i1 = levelIndex(to), N = S.levels[i0 + 1], LIFE = 5000;
   el.className = "";
   el.innerHTML = `<div class="top"><span class="spark">⚡</span><span class="rank">${S.levels[i0].rank}</span><span class="gain mono">+0 XP</span></div>
     <div class="bar"><span style="width:${pctIn(from, i0)}%"></span></div>
