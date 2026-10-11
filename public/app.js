@@ -293,7 +293,7 @@ function viewSheet(id) {
 const drafts = {}; // typed answers survive re-renders
 const notesOpen = {}; // which notes boxes are unrolled
 // [inserted text, key label, tooltip]: the variable x is drawn in math italics so it never looks like ×.
-const SYMBOLS = [["x", "𝑥", "La variable x"], ["(", "(", "Parenthèse"], [")", ")", "Parenthèse"], ["×", "×", "Multiplier (fois)"], ["÷", "÷", "Diviser"], ["/", "/", "Fraction : 3/4"], ["^", "^", "Puissance : x^3"], ["²", "²", "Au carré"], ["³", "³", "Au cube"], ["√", "√", "Racine carrée"], ["π", "π", "Pi"], ["≤", "≤", "Inférieur ou égal"], ["≥", "≥", "Supérieur ou égal"], ["≠", "≠", "Différent de"], ["±", "±", "Plus ou moins"], ["∞", "∞", "Infini"], [";", ";", "Séparer plusieurs solutions"], ["°", "°", "Degré"]];
+const SYMBOLS = [["x", "x", "La variable x (≠ ×, le signe fois)"], ["(", "(", "Parenthèse"], [")", ")", "Parenthèse"], ["×", "×", "Multiplier (fois)"], ["÷", "÷", "Diviser"], ["/", "/", "Fraction : 3/4"], ["^", "^", "Puissance : x^3"], ["²", "²", "Au carré"], ["³", "³", "Au cube"], ["√", "√", "Racine carrée"], ["π", "π", "Pi"], ["≤", "≤", "Inférieur ou égal"], ["≥", "≥", "Supérieur ou égal"], ["≠", "≠", "Différent de"], ["±", "±", "Plus ou moins"], ["∞", "∞", "Infini"], [";", ";", "Séparer plusieurs solutions"], ["°", "°", "Degré"]];
 function notesBox(ex, i, title) {
   const key = `${ex.id}:${i}`, text = drafts[key]?.w ?? ex.state[i].notes ?? "";
   const open = notesOpen[key] ?? !!text;

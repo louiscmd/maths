@@ -1,3 +1,6 @@
+/* The letter x — and only x — drawn with the curvy textbook x (KaTeX math italic), so it never looks like ×. */
+@font-face { font-family: "MathX"; src: url("https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/fonts/KaTeX_Math-Italic.woff2") format("woff2"); unicode-range: U+0078; size-adjust: 125%; font-display: swap; }
+
 /* Proof — light app theme: blue (navigation, structure) + orange (action, XP, energy). */
 :root {
   --bg: #f3f5fb;
@@ -170,7 +173,7 @@ button:disabled { opacity: .65; cursor: wait; transform: none !important; }
 .sym button:hover { border-color: var(--blue); color: var(--blue); transform: translateY(-1px); }
 input, textarea, select { width: 100%; background: var(--surface); border: 1.5px solid var(--line); color: var(--text); border-radius: 13px; padding: 12px 14px; font: 500 15px "Plus Jakarta Sans", sans-serif; transition: border-color .15s, box-shadow .15s; }
 input:focus, textarea:focus, select:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 4px var(--blue-50); }
-.ans { font-family: "JetBrains Mono", monospace; font-size: 17px; font-weight: 500; }
+.ans { font-family: "MathX", "JetBrains Mono", monospace; font-size: 17px; font-weight: 500; }
 textarea { resize: vertical; font-family: "JetBrains Mono", monospace; font-size: 14px; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
@@ -402,7 +405,7 @@ body.out .sidebar, body.out .topbar, body.out .tabbar { display: none; }
 @media (max-width: 900px) { #xpfx { top: 66px; } }
 
 /* Variable x key (math italic) vs the × key */
-.sym button.var { font: italic 600 18px "Cambria Math", "Times New Roman", serif; color: var(--blue); background: var(--blue-50); border-color: #cddcff; }
+.sym button.var { font: 400 21px "MathX", serif; color: var(--blue); background: var(--blue-50); border-color: #cddcff; }
 
 /* Notes / working box under the answer */
 .notes-box { border: 1.5px solid var(--line); border-radius: 14px; background: var(--surface-2); overflow: hidden; transition: border-color .15s, box-shadow .15s; }
@@ -414,5 +417,5 @@ body.out .sidebar, body.out .topbar, body.out .tabbar { display: none; }
 .notes-box .saved { color: var(--good); font-weight: 700; white-space: nowrap; }
 .notes-box .chev { color: var(--muted); transition: transform .2s; }
 .notes-box[open] .chev { transform: rotate(180deg); }
-.notes-box textarea { display: block; border: none; border-top: 1px dashed var(--line); border-radius: 0; box-shadow: none; min-height: 150px; line-height: 1.7; background: repeating-linear-gradient(transparent 0 calc(1.7em - 1px), #eef1f8 calc(1.7em - 1px) 1.7em); background-attachment: local; padding: 10px 14px; }
+.notes-box textarea { font-family: "MathX", "JetBrains Mono", monospace; display: block; border: none; border-top: 1px dashed var(--line); border-radius: 0; box-shadow: none; min-height: 150px; line-height: 1.7; background: repeating-linear-gradient(transparent 0 calc(1.7em - 1px), #eef1f8 calc(1.7em - 1px) 1.7em); background-attachment: local; padding: 10px 14px; }
 .notes-box textarea:focus { box-shadow: none; }
