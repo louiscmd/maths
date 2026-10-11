@@ -1,4 +1,4 @@
-# Proof
+# Mathéo
 
 Transforme les photos de tes fiches d'exercices de maths officielles en entraînement interactif : transcription mot pour mot, correction intelligente qui accepte toute écriture équivalente et lit tes calculs, indices progressifs, angle business, XP, rangs de carrière et révisions espacées.
 
@@ -13,7 +13,7 @@ La progression est enregistrée dans `data/`.
 
 ## Sur Vercel (avec comptes)
 
-- Connecte **Supabase** au projet (Vercel → **Storage** → **Create Database** → **Supabase**), puis redéploie. Proof affiche alors une page de connexion : chaque compte a sa progression et ses photos privées, dans le bucket Supabase Storage `proof` (créé automatiquement, accessible uniquement par le serveur).
+- Connecte **Supabase** au projet (Vercel → **Storage** → **Create Database** → **Supabase**), puis redéploie. Mathéo affiche alors une page de connexion : chaque compte a sa progression et ses photos privées, dans le bucket Supabase Storage `proof` (créé automatiquement, accessible uniquement par le serveur).
 - Clé Anthropic : chacun colle la sienne dans **Réglages → Clés** (gardée dans le navigateur). Ne mets **pas** `ANTHROPIC_API_KEY` dans Vercel si l'URL est publique : n'importe qui pourrait utiliser tes crédits.
 - Sans Supabase, Vercel efface la progression au redémarrage.
 

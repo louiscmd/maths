@@ -1,4 +1,4 @@
-// Proof — client
+// Mathéo — client
 import { THEMES, SKILLS, skillById, makeQuestion, nextSkill } from "/auto.js";
 
 let S = null; // server state
@@ -229,7 +229,7 @@ document.addEventListener("paste", (e) => {
 function sheetCard(sh) {
   const done = sh.exercises.filter(exDone).length;
   return `<a class="sheet card lift" href="#/sheet/${sh.id}">
-    ${sh.image ? `<img data-img="${sh.image}" alt="">` : `<div class="noimg">∎</div>`}
+    ${sh.image ? `<img data-img="${sh.image}" alt="">` : `<div class="noimg">📄</div>`}
     <div><b>${esc(sh.title)}</b>
     <div class="muted small">${plural(sh.exercises.length, "exercice")} · ${plural(done, "terminé")} · ${new Date(sh.createdAt).toLocaleDateString("fr-FR")}</div>
     <div class="progress"><span style="width:${(done / sh.exercises.length) * 100}%"></span></div></div></a>`;
@@ -604,7 +604,7 @@ function viewAuto() {
         }).join("")}</div></details>
       </div>`;
     }).join("")}</div>
-    <p class="muted small" style="margin-top:28px">Liste des automatismes inspirée du programme officiel de Première (et du découpage de MathALÉA). Les questions sont générées par Proof, avec des nombres différents à chaque fois.</p>`;
+    <p class="muted small" style="margin-top:28px">Liste des automatismes inspirée du programme officiel de Première (et du découpage de MathALÉA). Les questions sont générées par Mathéo, avec des nombres différents à chaque fois.</p>`;
 }
 
 // One quiz session lives in memory: { spec, mode, items: [{ q, picked }], i, combo, best, startedAt }.
@@ -822,7 +822,7 @@ function viewSettings() {
           <label class="small"><b>Clé API Anthropic</b> <span class="muted">— pour lire tes photos, préparer les indices et corriger tes calculs</span></label>
           <div class="row keyrow"><input id="key" type="password" placeholder="${mine ? "•••• enregistrée dans ce navigateur" : "sk-ant-…"}" autocomplete="off" spellcheck="false" />
             <button class="btn" id="saveKey">Enregistrer</button>${mine ? `<button class="ghost danger" id="delKey">Retirer</button>` : ""}</div>
-          <p class="small muted">Stockée <b>uniquement dans ce navigateur</b> et envoyée à ton serveur Proof à chaque requête — jamais enregistrée côté serveur. Crée-en une sur <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener"><u>console.anthropic.com</u></a>.</p>
+          <p class="small muted">Stockée <b>uniquement dans ce navigateur</b> et envoyée à ton serveur Mathéo à chaque requête — jamais enregistrée côté serveur. Crée-en une sur <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener"><u>console.anthropic.com</u></a>.</p>
           <ul class="status">
             <li class="${mine ? "good" : "muted"}">${mine ? "✓" : "○"} Clé dans ce navigateur</li>
             <li class="${k.server ? "good" : "muted"}">${k.server ? "✓" : "○"} Clé sur le serveur (<span class="mono">ANTHROPIC_API_KEY</span>)</li>
@@ -865,7 +865,7 @@ function viewLogin(mode = "login") {
   app.innerHTML = `
     <div class="auth-wrap">
       <div class="auth-art">
-        <div class="brand" style="padding:0"><span class="logo">∎</span><span>Proof</span></div>
+        <div class="brand" style="padding:0"><span class="logo">M</span><span>Mathéo</span></div>
         <div><h1>Tes vrais exercices de maths, en mode jeu.</h1>
           <p>Photo de ta fiche → exercices interactifs, corrigés intelligents, XP et automatismes de Première. Ta progression te suit partout.</p></div>
         ${coach("Salut, moi c'est Léo 🦊 Je t'explique tout simplement, avec des flèches → et des exemples concrets. On s'y met ?")}

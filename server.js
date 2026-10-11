@@ -1,4 +1,4 @@
-// Proof — turn photos of official math exercises into interactive, XP-tracked practice.
+// Mathéo — turn photos of official math exercises into interactive, XP-tracked practice.
 import express from "express";
 import crypto from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -555,7 +555,7 @@ app.delete("/api/rewards/:id", route((req) => {
   return state(req);
 }));
 
-app.listen(PORT, () => console.log(`Proof → http://localhost:${PORT} (stockage : ${store.kind})`));
+app.listen(PORT, () => console.log(`Mathéo → http://localhost:${PORT} (stockage : ${store.kind})`));
 
 // ---------- Demo content (works without an API key) ----------
 function demoSheet() {
