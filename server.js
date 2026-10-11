@@ -182,6 +182,8 @@ Write everything in ${lang}. Return one entry in "parts" per part, in order.`,
 const app = express();
 app.use(express.json({ limit: "25mb" }));
 app.use(express.static("public"));
+// On Vercel, public/ is served by the CDN (not bundled with this function), which only maps /index.html.
+if (process.env.VERCEL) app.get("/", (req, res) => res.redirect("/index.html"));
 app.use("/images", express.static(IMG_DIR));
 
 const route = (fn) => async (req, res) => {
