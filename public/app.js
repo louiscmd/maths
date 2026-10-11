@@ -155,6 +155,7 @@ function banners() {
 function render() {
   if (CONFIG.auth && !session) return viewLogin();
   if (!S) return;
+  document.body.classList.remove("out");
   shell();
   const [, view, a, b] = location.hash.split("/");
   if (view !== "auto" || a !== "play") stopQuiz();
@@ -765,6 +766,7 @@ function viewSettings() {
 
 // ---------- Login ----------
 function viewLogin(mode = "login") {
+  document.body.classList.add("out");
   for (const id of ["#nav", "#tabbar", "#hud", "#hud-mobile"]) $(id).innerHTML = "";
   app.innerHTML = `
     <div class="auth-wrap">

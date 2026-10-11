@@ -384,3 +384,7 @@ select { margin: 6px 0 14px; }
   #toasts { left: 16px; right: 16px; bottom: 90px; }
   .answer-row { flex-direction: column; }
 }
+
+/* Logged out: no navigation chrome around the login screen */
+body.out .shell { grid-template-columns: minmax(0, 1fr); }
+body.out .sidebar, body.out .topbar, body.out .tabbar { display: none; }
