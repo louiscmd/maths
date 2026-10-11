@@ -335,7 +335,7 @@ select { margin: 6px 0 14px; }
 #auth .orange-btn { margin-top: 14px; }
 
 /* ---------- Toasts, confetti, motion ---------- */
-#toasts { position: fixed; bottom: 26px; right: 26px; display: flex; flex-direction: column; gap: 10px; z-index: 50; }
+#toasts { position: fixed; top: 26px; right: 26px; display: flex; flex-direction: column; gap: 10px; z-index: 50; }
 .toast { background: var(--surface); border-radius: 16px; padding: 14px 20px; animation: pop .4s cubic-bezier(.2, 1.5, .4, 1); transition: .4s; max-width: 360px; box-shadow: var(--sh-3); font-weight: 600; border-left: 5px solid var(--blue); }
 .toast.good { border-left-color: var(--good); } .toast.good .mono { color: var(--good); }
 .toast.bad { border-left-color: var(--bad); } .toast.warn { border-left-color: var(--warn); }
