@@ -9,7 +9,8 @@ try { process.loadEnvFile(".env"); } catch {}
 
 const PORT = process.env.PORT || 3333;
 const MODEL = "claude-opus-5-5";
-const DATA = path.resolve("data");
+// Vercel's filesystem is read-only except /tmp (which is wiped when the instance recycles).
+const DATA = process.env.VERCEL ? "/tmp/proof-data" : path.resolve("data");
 const DB_FILE = path.join(DATA, "db.json");
 const IMG_DIR = path.join(DATA, "images");
 fs.mkdirSync(IMG_DIR, { recursive: true });
