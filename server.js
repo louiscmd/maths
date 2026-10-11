@@ -10,7 +10,7 @@ try { process.loadEnvFile(".env"); } catch {}
 
 const PORT = process.env.PORT || 3333;
 const MODEL = "claude-opus-5-5";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const store = await createStore();
 
 // ---------- Career ladder ----------
@@ -33,7 +33,7 @@ const UNLOCK = { twin: 2, exam: 3 };
 function emptyDb() {
   return {
     version: DB_VERSION,
-    profile: { xp: 0, streak: { count: 0, lastDay: null }, daily: {}, settings: { lang: "Français" }, rewards: [], mistakes: [] },
+    profile: { xp: 0, streak: { count: 0, lastDay: null }, daily: {}, settings: { lang: "Français" }, rewards: [], mistakes: [], auto: {}, autoRuns: [] },
     sheets: [demoSheet()],
   };
 }
@@ -47,6 +47,8 @@ async function loadDb() {
     db.profile.settings.lang = "Français";
     db.sheets = [...db.sheets.filter((s) => !s.demo), demoSheet()];
   }
+  db.profile.auto ||= {};
+  db.profile.autoRuns ||= [];
   ctx().db = db;
 }
 // Re-read after a slow AI call so we don't overwrite changes made meanwhile from another tab or device.
@@ -81,10 +83,14 @@ function award(ex, st) {
   if (ex.exam) xp *= 1.5;
   if (ex.generated) xp *= 0.75;
   xp = Math.round(xp);
+  return { xp, clean, levelUp: gainXp(xp) };
+}
+// Adds XP to today's total; returns the new rank if this crossed a level.
+function gainXp(xp) {
   const before = levelOf(ctx().db.profile.xp);
   ctx().db.profile.xp += xp;
   ctx().db.profile.daily[today()] = (ctx().db.profile.daily[today()] || 0) + xp;
-  return { xp, clean, levelUp: levelOf(ctx().db.profile.xp) > before ? LEVELS[levelOf(ctx().db.profile.xp)] : null };
+  return levelOf(ctx().db.profile.xp) > before ? LEVELS[levelOf(ctx().db.profile.xp)] : null;
 }
 // Spaced repetition: anything you needed a lot of help on comes back later.
 function afterExerciseDone(ex) {
@@ -155,15 +161,25 @@ Rules — trust is the whole point of this app:
 - bbox: the exercise's location on the photo as fractions (0-1) of image width/height, generous rather than tight.
 - Include every exercise visible, even partially cut ones (mark missing text [coupé]).`;
 
+const COACH_VOICE = `You are Léo, the student's friendly coach: like a cool older friend who is great at math. Talk to them directly and casually (in French: tutoiement).
+- Short sentences, everyday words. Explain the WHY, not just the how.
+- Make it tangible: money, pizza slices, phone battery, sneakers, followers, a bus trip… one concrete picture beats three abstract sentences.
+- Show the chain of reasoning with arrows: "48 € la vente − 18 € de matériaux → 30 € qui restent par support".
+- Warm and encouraging, never condescending, never fake hype. At most one emoji per message.`;
+
 const PREP_PART = obj({
   answer: { ...str, description: "Final answer, concise, LaTeX allowed" },
   accept: { ...arr(str), description: "Machine-checkable plain-text forms of the final answer, ONE ENTRY PER SOLUTION/VALUE, using * ^ / sqrt() pi exp() log() and '.' decimals. Examples: ['x=2','x=-3'] for two solutions; ['30*x-1200'] for an expression; ['sqrt(2)/2']; ['x=1','y=2'] for a system. Exact values when possible. Empty array if the answer is not a value or expression (proof, justification, sentence, graph, interval, inequality, table)." },
   formMatters: { type: "boolean", description: "true if the question demands a specific form that an equivalent value would not satisfy: factoriser, développer, réduire, simplifier, forme canonique, valeur exacte, arrondir/donner une valeur approchée à ..., écriture scientifique, fraction irréductible." },
-  hints: { ...arr(str), description: "Exactly 3 hints: 1) nudge — what to notice / which concept, 2) method — which tool and how to set it up, 3) first concrete step worked out, stopping well before the answer" },
-  solution: { ...str, description: "Full step-by-step solution, Markdown + LaTeX, each step on its own line" },
+  hints: { ...arr(str), description: "Exactly 3 hints in Léo's voice (1-3 short sentences each): 1) nudge — what to notice, with a tangible picture, 2) method — which tool and how to set it up, 3) first concrete step worked out with arrows, stopping well before the answer" },
+  steps: { ...arr(obj({
+    say: { ...str, description: "What we do in this step and WHY, in Léo's voice, 1-2 short sentences, arrows welcome" },
+    math: { ...str, description: "The math of this step in LaTeX WITHOUT $ delimiters (e.g. 'B(x) = 48x - (1200 + 18x)'), or empty string if none" },
+  })), description: "Full worked solution as 2-6 small steps, ending with the answer" },
   commonMistake: str,
 });
 const PREP_SCHEMA = obj({
+  coachIntro: { ...str, description: "Léo's 1-2 sentence welcome to this exercise: what it's really about in tangible terms and the game plan with arrows. No answers." },
   parts: arr(PREP_PART),
   businessLens: obj({
     concept: { ...str, description: "The math idea in one phrase" },
@@ -177,9 +193,11 @@ async function prepare(req, sheetId, exId) {
   if (ex.prepared) return;
   const r = await ask(req, {
     effort: "high",
-    system: `You are a rigorous math tutor preparing an official exercise for a student who is struggling and wants real progress.
-Solve every part carefully, then verify (substitute back, check domain, units, signs). Accuracy matters more than speed.
-Hints climb a ladder and never give away the final answer. Solutions are clear enough for a struggling student to follow line by line, using French school conventions and notation (virgule décimale, S = {…}, etc.).
+    system: `${COACH_VOICE}
+
+You are preparing an official exercise for a student who is struggling and wants real progress.
+Solve every part carefully FIRST, then verify (substitute back, check domain, units, signs). Accuracy matters more than anything — friendly tone never replaces rigour.
+Hints climb a ladder and never give away the final answer. Solution steps are small enough for a struggling student to follow, using French school conventions and notation (virgule décimale, S = {…}, etc.).
 The business lens shows honestly where this exact math shows up in business (pricing, margins, growth, break-even, interest, forecasting, logistics, statistics...). If the link is weak, pick the most honest application rather than forcing one.
 Write everything in ${langOf(sheet)} (except the "accept" field, which is plain machine-readable math). Return one entry in "parts" per part, in order.`,
     content: [
@@ -192,6 +210,7 @@ Write everything in ${langOf(sheet)} (except the "accept" field, which is plain 
   ({ ex } = findEx(sheetId, exId));
   ex.parts.forEach((p, i) => Object.assign(p, r.parts[i] || {}));
   ex.businessLens = r.businessLens;
+  ex.coachIntro = r.coachIntro;
   ex.prepared = true;
 }
 
@@ -280,6 +299,7 @@ function publicEx(ex) {
         hints: (p.hints || []).slice(0, st.hintsUsed),
         answer: open ? p.answer : undefined,
         solution: open ? p.solution : undefined,
+        steps: open ? p.steps : undefined,
         commonMistake: open ? p.commonMistake : undefined,
       };
     }),
@@ -357,7 +377,8 @@ app.post("/api/ex/:s/:e/check", route(async (req) => {
   const local = smartCheck(answer, part.accept);
   let g;
   if (local === "correct" && !part.formMatters) {
-    g = { verdict: "correct", feedback: "", mistakeType: "aucune" };
+    const cheers = ["Nickel, c'est exactement ça 🎯", "Bien joué ! Tu l'as eue.", "Propre. Rien à redire.", "Yes ! C'est la bonne réponse.", "Parfait → question validée."];
+    g = { verdict: "correct", feedback: cheers[Math.floor(Math.random() * cheers.length)], mistakeType: "aucune" };
   } else if (keyOf(req) && !ex.demo) {
     // 2) Claude reads the answer and the working, judging the maths rather than the formatting.
     g = await ask(req, {
@@ -369,9 +390,11 @@ verdict:
 - "partial": right value but the question explicitly demands a form that isn't met (factorised, developed, exact value, rounding to a given precision, irreducible fraction…), or some solutions missing.
 - "incorrect": mathematically different.
 An automatic equivalence checker said: "${local}" (correct = proven equal in value, different = readable but not equal, unknown = could not read). Trust it on values, but you decide about required forms.
-If the student showed work, find the FIRST wrong step and point to it precisely. Feedback is 1-3 sentences, specific, honest, encouraging.
+Feedback is written by Léo, the student's coach:
+${COACH_VOICE}
+If the student showed work, find the FIRST wrong step and point to it precisely (use an arrow to show where it went off track). Feedback is 1-3 short sentences, specific, honest, encouraging. If correct, say briefly what they did well.
 NEVER reveal the reference answer, nor the result of the step they got wrong. Write feedback in ${langOf(sheet)}.`,
-      content: [{ type: "text", text: JSON.stringify({ statement: ex.statement, figure: ex.figure, question: part.prompt, referenceAnswer: part.answer, referenceSolution: part.solution, studentAnswer: answer, studentWork: work || "(pas de calculs montrés)" }, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify({ statement: ex.statement, figure: ex.figure, question: part.prompt, referenceAnswer: part.answer, referenceSolution: part.steps || part.solution, studentAnswer: answer, studentWork: work || "(pas de calculs montrés)" }, null, 2) }],
       schema: GRADE_SCHEMA,
     });
   } else if (local === "unknown" || (part.formMatters && !ex.demo)) {
@@ -380,7 +403,7 @@ NEVER reveal the reference answer, nor the result of the step they got wrong. Wr
       : "Je n'arrive pas à lire ta réponse. Écris-la par exemple : x = 3/2, 2,5, S = {1 ; 4} ou 30x − 1200.");
   } else {
     g = { verdict: local === "correct" ? "correct" : "incorrect", mistakeType: "calcul",
-      feedback: "Ta réponse n'a pas la bonne valeur. Vérifie tes calculs ou prends un indice." };
+      feedback: "Hmm, ce n'est pas la bonne valeur. Reprends ton calcul étape par étape → ou prends un indice, c'est fait pour ça 😉" };
   }
 
   await reload();
@@ -399,6 +422,26 @@ NEVER reveal the reference answer, nor the result of the step they got wrong. Wr
     ctx().db.profile.mistakes = ctx().db.profile.mistakes.slice(0, 200);
   }
   return { ...state(req), result: { verdict: g.verdict, reward } };
+}));
+
+// "Je comprends pas" — Léo re-explains the question (before solving) or one solution step (after), in simpler words.
+app.post("/api/ex/:s/:e/explain", route(async (req) => {
+  const { sheet, ex } = findEx(req.params.s, req.params.e);
+  const i = req.body.part, part = ex.parts[i], st = ex.state[i];
+  const step = Number.isInteger(req.body.step) ? part.steps?.[req.body.step] : null;
+  if (step && !(st.solved || st.revealed)) throw httpError(400, "Termine d'abord la question");
+  const r = await ask(req, {
+    effort: "low",
+    system: `${COACH_VOICE}
+
+The student is stuck and asked you to explain ${step ? "one step of the worked solution" : "what the question is asking"} differently and more simply.
+Use a concrete everyday picture or a tiny example with small numbers, and arrows to show the chain. 3-5 short sentences.
+${step ? "" : "Do NOT solve it or give the answer or the method's result: only make the question and its key idea crystal clear."}
+Write in ${langOf(sheet)}. Math in LaTeX with $...$.`,
+    content: [{ type: "text", text: JSON.stringify({ statement: ex.statement, figure: ex.figure, question: part.prompt, ...(step ? { step, answer: part.answer } : {}) }, null, 2) }],
+    schema: obj({ text: str }),
+  });
+  return { ...state(req), explanation: r.text };
 }));
 
 app.post("/api/ex/:s/:e/hint", route((req) => {
@@ -452,6 +495,33 @@ app.post("/api/ex/:s/:e/twin", route(async (req) => {
   return { ...state(req), twinId: twin.id };
 }));
 
+// Automatismes: questions are generated and checked in the browser; the server keeps stats and awards XP.
+// Training: 4 XP per right answer + combo bonus. Épreuve (12 questions, timed): 6 XP each, +25 for a perfect sheet.
+app.post("/api/auto/finish", route((req) => {
+  const mode = req.body.mode === "exam" ? "exam" : "train";
+  const results = (Array.isArray(req.body.results) ? req.body.results : []).slice(0, 40)
+    .filter((r) => /^[a-z]-[a-z0-9-]{2,40}$/.test(r?.skill)).map((r) => ({ skill: r.skill, ok: !!r.ok }));
+  if (!results.length) throw httpError(400, "Aucune réponse");
+  const p = ctx().db.profile;
+  let xp = 0, combo = 0, best = 0;
+  for (const r of results) {
+    const st = (p.auto[r.skill] ||= { n: 0, ok: 0 });
+    st.n++; st.last = today();
+    if (r.ok) {
+      st.ok++; combo++; best = Math.max(best, combo);
+      xp += mode === "exam" ? 6 : 4 + Math.min(Math.max(combo - 2, 0), 4);
+    } else combo = 0;
+  }
+  const score = results.filter((r) => r.ok).length;
+  if (mode === "exam" && results.length >= 12 && score === results.length) xp += 25;
+  touchStreak();
+  xp = Math.round(xp * streakMult());
+  const levelUp = gainXp(xp);
+  p.autoRuns.unshift({ day: today(), mode, theme: String(req.body.theme || "mix").slice(0, 10), score, total: results.length, xp, seconds: Number(req.body.seconds) | 0 });
+  p.autoRuns = p.autoRuns.slice(0, 60);
+  return { ...state(req), result: { xp, levelUp, score, total: results.length, bestCombo: best } };
+}));
+
 app.post("/api/settings", route((req) => {
   const { lang, theme } = req.body;
   if (lang) ctx().db.profile.settings.lang = String(lang);
@@ -484,13 +554,28 @@ function demoSheet() {
     id: "demo1", demo: true, prepared: true, number: "1", title: "Seuil de rentabilité", topic: "Équations du premier degré", difficulty: 2,
     statement: "Un petit atelier fabrique des supports de téléphone en bois. Les charges fixes mensuelles s'élèvent à $1\\,200$ €. Chaque support coûte $18$ € de matériaux et est vendu $48$ €.",
     figure: "",
+    coachIntro: "Imagine que c'est ton atelier 🪵 Chaque support vendu te rapporte un peu d'argent, mais le loyer et les machines coûtent 1 200 € même si tu ne vends rien. On va trouver → combien tu gagnes par support → combien il en faut pour ne plus perdre d'argent.",
     parts: [
       { label: "a)", prompt: "Exprimer le bénéfice mensuel $B(x)$ en fonction du nombre $x$ de supports vendus.", accept: ["30*x-1200"], formMatters: false,
-        answer: "$B(x) = 30x - 1\\,200$", hints: ["Bénéfice = recettes − coûts. Quels coûts dépendent de $x$, et lesquels n'en dépendent pas ?", "Les recettes valent $48x$. Le coût total = charges fixes + coût d'un support × $x$.", "$B(x) = 48x - (1\\,200 + 18x)$ — il reste à réduire."],
-        solution: "Recettes : $R(x) = 48x$\nCoût total : $C(x) = 1\\,200 + 18x$\n$B(x) = R(x) - C(x) = 48x - 1\\,200 - 18x = 30x - 1\\,200$", commonMistake: "Oublier les parenthèses et écrire $48x - 1\\,200 + 18x$." },
+        answer: "$B(x) = 30x - 1\\,200$",
+        hints: ["Le bénéfice, c'est ce qui reste dans ta poche : l'argent qui rentre − l'argent qui sort. Qu'est-ce qui dépend du nombre de supports vendus, et qu'est-ce qui ne bouge jamais ?", "Argent qui rentre → $48$ € par support, donc $48x$. Argent qui sort → $1\\,200$ € fixes + $18$ € par support.", "Ça donne $B(x) = 48x - (1\\,200 + 18x)$. Attention aux parenthèses → il te reste juste à simplifier 😉"],
+        steps: [
+          { say: "D'abord, l'argent qui rentre : chaque support vendu → 48 €. Pour $x$ supports :", math: "R(x) = 48x" },
+          { say: "Ensuite, l'argent qui sort : le fixe (1 200 €, vendu ou pas) + 18 € de bois par support :", math: "C(x) = 1\\,200 + 18x" },
+          { say: "Bénéfice = ce qui rentre − ce qui sort. On met bien les parenthèses, le − s'applique à TOUT le coût :", math: "B(x) = 48x - (1\\,200 + 18x) = 48x - 1\\,200 - 18x" },
+          { say: "On regroupe les $x$ : 48 − 18 = 30 € qui restent par support → c'est ta marge.", math: "B(x) = 30x - 1\\,200" },
+        ],
+        commonMistake: "Oublier les parenthèses et écrire $48x - 1\\,200 + 18x$ → le coût du bois devient un gain !" },
       { label: "b)", prompt: "Combien de supports faut-il vendre par mois pour atteindre le seuil de rentabilité ?", accept: ["40"], formMatters: false,
-        answer: "$x = 40$", hints: ["Le seuil de rentabilité, c'est quand le bénéfice vaut exactement zéro.", "Résous $B(x) = 0$ avec ta réponse au a).", "$30x - 1\\,200 = 0 \\iff 30x = 1\\,200$"],
-        solution: "$B(x) = 0$\n$30x - 1\\,200 = 0$\n$30x = 1\\,200$\n$x = 40$ supports", commonMistake: "Diviser 1 200 par 48 (le prix) au lieu de 30 (la marge par support)." },
+        answer: "$x = 40$",
+        hints: ["Le seuil de rentabilité, c'est le moment pile où tu ne perds plus rien… mais où tu ne gagnes encore rien non plus. Ça veut dire quoi pour $B(x)$ ?", "Bénéfice nul → résous $B(x) = 0$ avec ta formule du a).", "$30x - 1\\,200 = 0$ → passe le $1\\,200$ de l'autre côté. Combien de fois 30 € pour remplir 1 200 € ?"],
+        steps: [
+          { say: "Seuil de rentabilité = bénéfice zéro pile. On écrit ça :", math: "30x - 1\\,200 = 0" },
+          { say: "On passe les 1 200 de l'autre côté → il faut que les marges couvrent tout le fixe :", math: "30x = 1\\,200" },
+          { say: "Chaque support remplit 30 € du « trou » de 1 200 € → 1 200 ÷ 30 :", math: "x = 40" },
+          { say: "Donc 40 supports par mois. Le 41ᵉ, c'est ton premier vrai bénéfice 🎉", math: "" },
+        ],
+        commonMistake: "Diviser 1 200 par 48 (le prix de vente) au lieu de 30 (ce qu'il te reste vraiment par support)." },
     ],
     businessLens: { concept: "Seuil de rentabilité et marge sur coût variable", scenario: "Toute entreprise qui vend un produit vit avec cette équation. Si un sweat te coûte 18 € à fabriquer et que tu le vends 45 €, chaque vente rapporte 27 € pour couvrir tes charges fixes (pub, site, design). Avec 810 € de charges fixes par mois, il te faut 30 ventes rien que pour ne plus perdre d'argent — la 31ᵉ est ton premier vrai bénéfice.", takeaway: "Connais ta marge par unité et tes charges fixes, et tu sais exactement combien de ventes il te faut." },
   };
