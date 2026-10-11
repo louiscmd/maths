@@ -10,7 +10,7 @@
   "type": "module",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
-    "@upstash/redis": "^1.39.0",
+    "@supabase/supabase-js": "2.117.2",
     "express": "^4.22.3",
     "mathjs": "^15.2.0"
   }

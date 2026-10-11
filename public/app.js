@@ -10,14 +10,38 @@ const KEY = "proof.anthropicKey";
 const getKey = () => { try { return localStorage.getItem(KEY) || ""; } catch { return ""; } };
 const setKey = (k) => { try { k ? localStorage.setItem(KEY, k) : localStorage.removeItem(KEY); } catch {} };
 
+// Accounts (when the server uses Supabase): the session token goes with every request.
+let CONFIG = { auth: null }, sb = null, session = null;
+function authHeaders() {
+  const h = {};
+  if (getKey()) h["x-anthropic-key"] = getKey();
+  if (session) h.Authorization = `Bearer ${session.access_token}`;
+  return h;
+}
+
 async function api(url, body, method) {
-  const headers = { "Content-Type": "application/json" };
-  if (getKey()) headers["x-anthropic-key"] = getKey();
+  const headers = { "Content-Type": "application/json", ...authHeaders() };
   const res = await fetch(url, { method: method || (body ? "POST" : "GET"), headers, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json();
+  if (res.status === 401 && CONFIG.auth) { session = null; viewLogin(); }
   if (!res.ok) throw new Error(data.error || "La requête a échoué");
   S = data;
   return data;
+}
+
+// Private photos: fetched with the session token, then shown from memory.
+const imgCache = {};
+function imageUrl(name) {
+  return (imgCache[name] ||= fetch(`/images/${name}`, { headers: authHeaders() })
+    .then((r) => (r.ok ? r.blob() : Promise.reject()))
+    .then((b) => URL.createObjectURL(b))
+    .catch(() => { delete imgCache[name]; return ""; }));
+}
+function hydrateImages(root = app) {
+  root.querySelectorAll("[data-img]").forEach(async (el) => {
+    const u = await imageUrl(el.dataset.img);
+    if (el.tagName === "IMG") el.src = u; else el.href = u;
+  });
 }
 
 // Markdown-lite + KaTeX. Math is protected before escaping so LaTeX survives.
@@ -89,14 +113,16 @@ function banners() {
 
 // ---------- Router ----------
 function render() {
+  if (CONFIG.auth && !session) return viewLogin();
   if (!S) return;
   hud();
   const [, view, a, b] = location.hash.split("/");
-  if (view === "sheet") return viewSheet(a);
+  if (view === "sheet") { viewSheet(a); return hydrateImages(); }
   if (view === "ex") return viewEx(a, b);
   if (view === "career") return viewCareer();
-  if (view === "settings") return viewSettings();
-  viewDesk();
+  if (view === "settings") viewSettings();
+  else viewDesk();
+  hydrateImages();
 }
 addEventListener("hashchange", () => { scrollTo(0, 0); render(); });
 
@@ -142,7 +168,7 @@ document.addEventListener("paste", (e) => {
 function sheetCard(sh) {
   const done = sh.exercises.filter(exDone).length;
   return `<a class="sheet card" href="#/sheet/${sh.id}">
-    ${sh.image ? `<img src="/images/${sh.image}" alt="">` : `<div class="noimg">∎</div>`}
+    ${sh.image ? `<img data-img="${sh.image}" alt="">` : `<div class="noimg">∎</div>`}
     <div><b>${esc(sh.title)}</b>
     <div class="muted small">${plural(sh.exercises.length, "exercice")} · ${plural(done, "terminé")} · ${new Date(sh.createdAt).toLocaleDateString("fr-FR")}</div>
     <div class="progress"><span style="width:${(done / sh.exercises.length) * 100}%"></span></div></div></a>`;
@@ -197,7 +223,7 @@ function viewSheet(id) {
     <div class="row between"><h1>${esc(sh.title)}</h1>${sh.demo ? "" : `<button class="ghost danger" id="del">Supprimer la fiche</button>`}</div>
     <div class="sheet-layout">
       <div class="grid">${sh.exercises.map((ex) => exCard(sh, ex)).join("")}</div>
-      ${sh.image ? `<a href="/images/${sh.image}" target="_blank" class="original"><img src="/images/${sh.image}" alt="Fiche originale"><span class="muted small">Photo originale — clique pour agrandir</span></a>` : ""}
+      ${sh.image ? `<a data-img="${sh.image}" target="_blank" class="original"><img data-img="${sh.image}" alt="Fiche originale"><span class="muted small">Photo originale — clique pour agrandir</span></a>` : ""}
     </div>`;
   const del = $("#del");
   if (del) del.onclick = async () => { if (confirm("Supprimer cette fiche et ta progression dessus ?")) { await api(`/api/sheets/${id}`, null, "DELETE").catch(fail); location.hash = "#/"; } };
@@ -354,7 +380,7 @@ function toggleScan(sh, ex) {
     c.getContext("2d").drawImage(img, x, y, w, h, 0, 0, w, h);
     box.append(c);
   };
-  img.src = `/images/${sh.image}`;
+  imageUrl(sh.image).then((u) => (img.src = u));
 }
 
 // ---------- Career ----------
@@ -407,7 +433,7 @@ function viewCareer() {
 function viewSettings() {
   const p = S.profile, k = S.keys, mine = getKey();
   const themes = [["default", 0], ["gold", 1], ["emerald", 4], ["crimson", 6]];
-  const storage = { redis: ["good", "Upstash Redis — ta progression est sauvegardée."], file: ["good", "Fichiers locaux (dossier data/) — ta progression est sauvegardée."], temp: ["warn", "Temporaire — Vercel efface les données au redémarrage."] }[k.storage];
+  const storage = { supabase: ["good", "Supabase — ta progression est sauvegardée dans ton compte."], file: ["good", "Fichiers locaux (dossier data/) — ta progression est sauvegardée."], temp: ["warn", "Temporaire — Vercel efface les données au redémarrage."] }[k.storage];
   app.innerHTML = `
     <h1>Réglages</h1>
     <div class="career">
@@ -423,10 +449,11 @@ function viewSettings() {
           </ul>
           <h3 style="margin-top:20px">Sauvegarde de la progression</h3>
           <p class="small ${storage[0]}-text">● ${storage[1]}</p>
-          ${k.storage === "temp" ? `<p class="small muted">Pour garder ta progression sur Vercel : dans ton projet Vercel → <b>Storage</b> → <b>Create Database</b> → <b>Upstash for Redis</b> (gratuit) → connecte-la au projet, puis redéploie. Les clés <span class="mono">KV_REST_API_URL</span> et <span class="mono">KV_REST_API_TOKEN</span> sont ajoutées automatiquement et Proof les utilise.</p>` : ""}
+          ${k.storage === "temp" ? `<p class="small muted">Pour garder ta progression sur Vercel : dans ton projet Vercel → <b>Storage</b> → <b>Create Database</b> → <b>Supabase</b> → connecte-la au projet, puis redéploie.</p>` : ""}
         </div>
       </div>
       <div>
+        ${session ? `<div class="card"><h3>Compte</h3><p class="small">Connecté en tant que <b>${esc(session.user.email)}</b></p><button class="ghost" id="logout">Se déconnecter</button></div>` : ""}
         <div class="card"><h3>Langue</h3>
           <label class="small muted">Langue des indices, retours et corrigés</label>
           <select id="lang">${["Français", "English", "Polski", "auto"].map((l) => `<option ${p.settings.lang === l ? "selected" : ""} value="${l}">${l === "auto" ? "Celle de l'exercice" : l}</option>`).join("")}</select>
@@ -443,11 +470,64 @@ function viewSettings() {
     if (!/^sk-ant-/.test(v)) return toast("Une clé Anthropic commence par sk-ant-", "warn");
     setKey(v);
     toast("Clé enregistrée dans ce navigateur ✓", "good");
-    api("/api/state").then(render, fail);
+    boot().catch(fail);
   };
   $("#delKey")?.addEventListener("click", () => { setKey(""); toast("Clé retirée de ce navigateur."); api("/api/state").then(render, fail); });
   app.querySelectorAll("[data-theme]").forEach((b) => (b.onclick = () => api("/api/settings", { theme: b.dataset.theme }).then(render, fail)));
   $("#lang").onchange = (e) => api("/api/settings", { lang: e.target.value }).then(render, fail);
+  $("#logout")?.addEventListener("click", () => sb.auth.signOut());
 }
 
-api("/api/state").then(render, fail);
+// ---------- Login ----------
+function viewLogin(mode = "login") {
+  $("#hud").innerHTML = "";
+  app.innerHTML = `
+    <div class="login card">
+      <div class="brand big-brand"><span class="logo">∎</span> Proof</div>
+      <p class="muted small">Tes exercices de maths officiels, en version interactive. Ta progression est privée et te suit sur tous tes appareils.</p>
+      <div class="tabs"><button class="${mode === "login" ? "on" : ""}" data-mode="login">Se connecter</button><button class="${mode === "signup" ? "on" : ""}" data-mode="signup">Créer un compte</button></div>
+      <form id="auth">
+        <label class="small muted">E-mail</label>
+        <input name="email" type="email" autocomplete="email" required />
+        <label class="small muted">Mot de passe${mode === "signup" ? " (8 caractères minimum)" : ""}</label>
+        <input name="password" type="password" autocomplete="${mode === "signup" ? "new-password" : "current-password"}" minlength="${mode === "signup" ? 8 : 1}" required />
+        <button class="btn wide-btn">${mode === "signup" ? "Créer mon compte" : "Se connecter"}</button>
+      </form>
+    </div>`;
+  app.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = () => viewLogin(b.dataset.mode)));
+  $("#auth").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target), email = f.get("email").trim(), password = f.get("password");
+    busy($("#auth .btn"), mode === "signup" ? "Création…" : "Connexion…");
+    try {
+      if (mode === "signup") {
+        const r = await fetch("/api/signup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error);
+      }
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) throw new Error(/invalid/i.test(error.message) ? "E-mail ou mot de passe incorrect." : error.message);
+    } catch (err) { fail(err); viewLogin(mode); }
+  };
+}
+
+async function boot() {
+  CONFIG = await fetch("/api/config").then((r) => r.json());
+  if (CONFIG.error) throw new Error(CONFIG.error);
+  if (CONFIG.auth) {
+    const { createClient } = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/+esm");
+    sb = createClient(CONFIG.auth.url, CONFIG.auth.anon);
+    session = (await sb.auth.getSession()).data.session;
+    sb.auth.onAuthStateChange((event, s) => {
+      const was = session?.user.id;
+      session = s;
+      if (!s) { S = null; for (const k in imgCache) delete imgCache[k]; location.hash = "#/"; return viewLogin(); }
+      if (s.user.id !== was) boot().catch(fail);
+    });
+    if (!session) return viewLogin();
+  }
+  await api("/api/state");
+  render();
+}
+
+boot().catch(fail);

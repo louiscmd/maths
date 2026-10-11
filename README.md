@@ -11,10 +11,11 @@ Transforme les photos de tes fiches d'exercices de maths officielles en entraîn
 
 La progression est enregistrée dans `data/`.
 
-## Sur Vercel
+## Sur Vercel (avec comptes)
 
-- Clé : colle-la dans **Réglages → Clés** sur le site. Ne mets **pas** `ANTHROPIC_API_KEY` dans Vercel si l'URL est publique : n'importe qui pourrait utiliser tes crédits.
-- Progression : sans base de données, Vercel l'efface au redémarrage. Projet Vercel → **Storage** → **Create Database** → **Upstash for Redis** → connecter au projet → redéployer. Proof utilise automatiquement `KV_REST_API_URL` / `KV_REST_API_TOKEN` (ou `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`).
+- Connecte **Supabase** au projet (Vercel → **Storage** → **Create Database** → **Supabase**), puis redéploie. Proof affiche alors une page de connexion : chaque compte a sa progression et ses photos privées, dans le bucket Supabase Storage `proof` (créé automatiquement, accessible uniquement par le serveur).
+- Clé Anthropic : chacun colle la sienne dans **Réglages → Clés** (gardée dans le navigateur). Ne mets **pas** `ANTHROPIC_API_KEY` dans Vercel si l'URL est publique : n'importe qui pourrait utiliser tes crédits.
+- Sans Supabase, Vercel efface la progression au redémarrage.
 
 ## Correction des réponses
 

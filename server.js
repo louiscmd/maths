@@ -1,6 +1,7 @@
 // Proof — turn photos of official math exercises into interactive, XP-tracked practice.
 import express from "express";
 import crypto from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import Anthropic from "@anthropic-ai/sdk";
 import { createStore } from "./store.js";
 import { smartCheck } from "./answers.js";
@@ -29,7 +30,6 @@ const levelOf = (xp) => LEVELS.reduce((acc, l, i) => (xp >= l.xp ? i : acc), 0);
 const UNLOCK = { twin: 2, exam: 3 };
 
 // ---------- Data ----------
-let db;
 function emptyDb() {
   return {
     version: DB_VERSION,
@@ -37,16 +37,20 @@ function emptyDb() {
     sheets: [demoSheet()],
   };
 }
+// Each request runs with its own { uid, db } so several users on one server never mix their data.
+const als = new AsyncLocalStorage();
+const ctx = () => als.getStore();
 async function loadDb() {
-  db = (await store.load()) || emptyDb();
+  const db = (await store.load(ctx().uid)) || emptyDb();
   if (db.version !== DB_VERSION) {
     db.version = DB_VERSION;
     db.profile.settings.lang = "Français";
     db.sheets = [...db.sheets.filter((s) => !s.demo), demoSheet()];
   }
+  ctx().db = db;
 }
-// Re-read after a slow AI call so we don't overwrite changes made meanwhile (matters with Redis).
-async function reload() { if (store.kind === "redis") await loadDb(); }
+// Re-read after a slow AI call so we don't overwrite changes made meanwhile from another tab or device.
+async function reload() { if (store.kind === "supabase") await loadDb(); }
 
 const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (d, n) => new Date(Date.parse(d) + n * 864e5).toISOString().slice(0, 10);
@@ -54,7 +58,7 @@ const id = () => crypto.randomBytes(5).toString("hex");
 function httpError(status, message) { return Object.assign(new Error(message), { status }); }
 function freshPart() { return { attempts: 0, hintsUsed: 0, revealed: false, solved: false, xp: 0, feedback: null }; }
 function findEx(sheetId, exId) {
-  const sheet = db.sheets.find((s) => s.id === sheetId);
+  const sheet = ctx().db.sheets.find((s) => s.id === sheetId);
   const ex = sheet?.exercises.find((e) => e.id === exId);
   if (!ex) throw httpError(404, "Exercice introuvable");
   return { sheet, ex };
@@ -62,9 +66,9 @@ function findEx(sheetId, exId) {
 
 // ---------- XP engine ----------
 const HINT_MULT = [1, 0.75, 0.5, 0.25];
-function streakMult() { return 1 + Math.min(db.profile.streak.count, 10) * 0.05; }
+function streakMult() { return 1 + Math.min(ctx().db.profile.streak.count, 10) * 0.05; }
 function touchStreak() {
-  const s = db.profile.streak, t = today();
+  const s = ctx().db.profile.streak, t = today();
   if (s.lastDay === t) return;
   s.count = s.lastDay === addDays(t, -1) ? s.count + 1 : 1;
   s.lastDay = t;
@@ -77,10 +81,10 @@ function award(ex, st) {
   if (ex.exam) xp *= 1.5;
   if (ex.generated) xp *= 0.75;
   xp = Math.round(xp);
-  const before = levelOf(db.profile.xp);
-  db.profile.xp += xp;
-  db.profile.daily[today()] = (db.profile.daily[today()] || 0) + xp;
-  return { xp, clean, levelUp: levelOf(db.profile.xp) > before ? LEVELS[levelOf(db.profile.xp)] : null };
+  const before = levelOf(ctx().db.profile.xp);
+  ctx().db.profile.xp += xp;
+  ctx().db.profile.daily[today()] = (ctx().db.profile.daily[today()] || 0) + xp;
+  return { xp, clean, levelUp: levelOf(ctx().db.profile.xp) > before ? LEVELS[levelOf(ctx().db.profile.xp)] : null };
 }
 // Spaced repetition: anything you needed a lot of help on comes back later.
 function afterExerciseDone(ex) {
@@ -125,11 +129,11 @@ async function ask(req, { system, content, schema, effort = "high" }) {
   return JSON.parse(text);
 }
 async function imageBlock(name) {
-  const buf = await store.getImage(name);
+  const buf = await store.getImage(ctx().uid, name);
   return { type: "image", source: { type: "base64", media_type: "image/jpeg", data: buf.toString("base64") } };
 }
 const langOf = (sheet) =>
-  db.profile.settings.lang === "auto" ? `the same language as the exercise (${sheet.language})` : db.profile.settings.lang;
+  ctx().db.profile.settings.lang === "auto" ? `the same language as the exercise (${sheet.language})` : ctx().db.profile.settings.lang;
 
 const EX_FIELDS = {
   number: { ...str, description: "Official exercise number/label as printed, e.g. '3' or '12a'" },
@@ -198,27 +202,72 @@ app.use(express.static("public"));
 // On Vercel, public/ is served by the CDN (not bundled with this function), which only maps /index.html.
 if (process.env.VERCEL) app.get("/", (req, res) => res.redirect("/index.html"));
 
-app.get("/images/:name", async (req, res) => {
-  const buf = await store.getImage(req.params.name);
-  if (!buf) return res.sendStatus(404);
-  res.set({ "Content-Type": "image/jpeg", "Cache-Control": "private, max-age=31536000, immutable" }).send(buf);
-});
+// ---------- Accounts ----------
+// With Supabase, every request carries the user's session token; locally there is one user and no login.
+const userCache = new Map(); // token → { uid, until }
+async function userOf(req) {
+  if (!store.auth) return "local";
+  const token = /^Bearer (.+)$/.exec(req.get("authorization") || "")?.[1];
+  if (!token) throw httpError(401, "Connecte-toi pour continuer.");
+  const hit = userCache.get(token);
+  if (hit && hit.until > Date.now()) return hit.uid;
+  const user = await store.userFromToken(token);
+  if (!user) throw httpError(401, "Session expirée — reconnecte-toi.");
+  if (userCache.size > 500) userCache.clear();
+  userCache.set(token, { uid: user.id, until: Date.now() + 5 * 60e3 });
+  return user.id;
+}
+
+function sendError(res, e) {
+  console.error(e);
+  const msg = e instanceof Anthropic.AuthenticationError ? "Clé Anthropic refusée — vérifie-la dans Réglages → Clés."
+    : e instanceof Anthropic.RateLimitError ? "Trop de requêtes — réessaie dans un instant."
+    : e instanceof Anthropic.APIConnectionError ? "Impossible de joindre l'API Anthropic."
+    : e.message;
+  res.status(e.status && e.status < 600 ? e.status : 500).json({ error: msg });
+}
 
 const route = (fn) => async (req, res) => {
   try {
-    await loadDb();
-    const out = await fn(req, res);
-    if (req.method !== "GET") await store.save(db);
-    res.json(out);
-  } catch (e) {
-    console.error(e);
-    const msg = e instanceof Anthropic.AuthenticationError ? "Clé Anthropic refusée — vérifie-la dans Réglages → Clés."
-      : e instanceof Anthropic.RateLimitError ? "Trop de requêtes — réessaie dans un instant."
-      : e instanceof Anthropic.APIConnectionError ? "Impossible de joindre l'API Anthropic."
-      : e.message;
-    res.status(e.status && e.status < 600 ? e.status : 500).json({ error: msg });
-  }
+    const uid = await userOf(req);
+    await als.run({ uid, db: null }, async () => {
+      await loadDb();
+      const out = await fn(req, res);
+      if (req.method !== "GET") await store.save(ctx().uid, ctx().db);
+      res.json(out);
+    });
+  } catch (e) { sendError(res, e); }
 };
+
+// Public: tells the browser whether to show the login screen, and which Supabase project to log in to.
+app.get("/api/config", async (req, res) => {
+  try {
+    await store.health();
+    res.json({ auth: store.auth, storage: store.kind });
+  } catch (e) { sendError(res, e); }
+});
+
+app.post("/api/signup", async (req, res) => {
+  try {
+    if (!store.auth) throw httpError(400, "Pas de comptes en mode local.");
+    const email = String(req.body.email || "").trim().toLowerCase(), password = String(req.body.password || "");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw httpError(400, "Adresse e-mail invalide.");
+    if (password.length < 8) throw httpError(400, "Le mot de passe doit faire au moins 8 caractères.");
+    try { await store.signUp(email, password); }
+    catch (e) { throw httpError(/already|exists|registered/i.test(e.message) ? 409 : 400, /already|exists|registered/i.test(e.message) ? "Un compte existe déjà avec cet e-mail — connecte-toi." : e.message); }
+    res.json({ ok: true });
+  } catch (e) { sendError(res, e); }
+});
+
+// Photos are private: the browser fetches them with its session token, not as public URLs.
+app.get("/images/:name", async (req, res) => {
+  try {
+    const uid = await userOf(req);
+    const buf = await store.getImage(uid, req.params.name);
+    if (!buf) return res.sendStatus(404);
+    res.set({ "Content-Type": "image/jpeg", "Cache-Control": "private, max-age=31536000, immutable" }).send(buf);
+  } catch (e) { sendError(res, e); }
+});
 
 // Strip answers/solutions/hints the student hasn't earned before sending to the browser.
 function publicEx(ex) {
@@ -237,12 +286,12 @@ function publicEx(ex) {
   };
 }
 function state(req) {
-  const p = db.profile, t = today();
+  const p = ctx().db.profile, t = today();
   if (p.streak.lastDay && p.streak.lastDay < addDays(t, -1)) p.streak.count = 0;
   return {
     profile: p, levels: LEVELS, level: levelOf(p.xp), unlocks: UNLOCK, today: t,
     keys: { server: !!process.env.ANTHROPIC_API_KEY, browser: !!req.get("x-anthropic-key"), storage: store.kind },
-    sheets: db.sheets.map((s) => ({ ...s, exercises: s.exercises.map(publicEx) })),
+    sheets: ctx().db.sheets.map((s) => ({ ...s, exercises: s.exercises.map(publicEx) })),
   };
 }
 
@@ -253,7 +302,7 @@ app.post("/api/sheets", route(async (req) => {
   if (!m) throw httpError(400, "Envoie une image JPEG/PNG");
   if (!keyOf(req)) throw httpError(401, NO_KEY);
   const sheet = { id: id(), createdAt: new Date().toISOString(), image: `${id()}.jpg` };
-  await store.putImage(sheet.image, Buffer.from(m[1], "base64"));
+  await store.putImage(ctx().uid, sheet.image, Buffer.from(m[1], "base64"));
   try {
     const r = await ask(req, {
       effort: "high",
@@ -269,18 +318,18 @@ app.post("/api/sheets", route(async (req) => {
     Object.assign(sheet, { title: r.title, language: r.language });
     sheet.exercises = r.exercises.map((e) => ({ ...e, id: id(), state: e.parts.map(freshPart), prepared: false }));
   } catch (e) {
-    await store.delImage(sheet.image);
+    await store.delImage(ctx().uid, sheet.image);
     throw e;
   }
   await reload();
-  db.sheets.unshift(sheet);
+  ctx().db.sheets.unshift(sheet);
   return state(req);
 }));
 
 app.delete("/api/sheets/:id", route(async (req) => {
-  const s = db.sheets.find((x) => x.id === req.params.id);
-  if (s?.image) await store.delImage(s.image);
-  db.sheets = db.sheets.filter((x) => x.id !== req.params.id);
+  const s = ctx().db.sheets.find((x) => x.id === req.params.id);
+  if (s?.image) await store.delImage(ctx().uid, s.image);
+  ctx().db.sheets = ctx().db.sheets.filter((x) => x.id !== req.params.id);
   return state(req);
 }));
 
@@ -346,8 +395,8 @@ NEVER reveal the reference answer, nor the result of the step they got wrong. Wr
     st.xp = reward.xp;
     if (ex.state.every((x) => x.solved || x.revealed)) afterExerciseDone(ex);
   } else {
-    db.profile.mistakes.unshift({ day: today(), topic: ex.topic, type: g.mistakeType, exercise: `${sheet.title} · Ex. ${ex.number}${part.label ? " " + part.label : ""}`, note: g.feedback });
-    db.profile.mistakes = db.profile.mistakes.slice(0, 200);
+    ctx().db.profile.mistakes.unshift({ day: today(), topic: ex.topic, type: g.mistakeType, exercise: `${sheet.title} · Ex. ${ex.number}${part.label ? " " + part.label : ""}`, note: g.feedback });
+    ctx().db.profile.mistakes = ctx().db.profile.mistakes.slice(0, 200);
   }
   return { ...state(req), result: { verdict: g.verdict, reward } };
 }));
@@ -379,7 +428,7 @@ app.post("/api/ex/:s/:e/retry", route((req) => {
 app.post("/api/ex/:s/:e/exam", route((req) => {
   const { ex } = findEx(req.params.s, req.params.e);
   if (req.body.on) {
-    if (levelOf(db.profile.xp) < UNLOCK.exam) throw httpError(403, `Le mode examen se débloque au rang ${LEVELS[UNLOCK.exam].rank}`);
+    if (levelOf(ctx().db.profile.xp) < UNLOCK.exam) throw httpError(403, `Le mode examen se débloque au rang ${LEVELS[UNLOCK.exam].rank}`);
     if (ex.state.some((s) => s.attempts || s.hintsUsed || s.revealed)) throw httpError(400, "Lance le mode examen sur une tentative neuve (utilise Recommencer)");
     ex.exam = { startedAt: Date.now() };
   } else ex.exam = null;
@@ -389,7 +438,7 @@ app.post("/api/ex/:s/:e/exam", route((req) => {
 app.post("/api/ex/:s/:e/twin", route(async (req) => {
   const { s, e } = req.params;
   let { sheet, ex } = findEx(s, e);
-  if (levelOf(db.profile.xp) < UNLOCK.twin) throw httpError(403, `Les exercices jumeaux se débloquent au rang ${LEVELS[UNLOCK.twin].rank}`);
+  if (levelOf(ctx().db.profile.xp) < UNLOCK.twin) throw httpError(403, `Les exercices jumeaux se débloquent au rang ${LEVELS[UNLOCK.twin].rank}`);
   const t = await ask(req, {
     effort: "medium",
     system: `You write one new practice exercise that is a twin of an official one: same structure, same skills, same number of parts, same difficulty, same style and language as the original (${sheet.language}), but different numbers and context. Make the numbers work out as cleanly as in the original. Markdown + LaTeX.`,
@@ -405,25 +454,25 @@ app.post("/api/ex/:s/:e/twin", route(async (req) => {
 
 app.post("/api/settings", route((req) => {
   const { lang, theme } = req.body;
-  if (lang) db.profile.settings.lang = String(lang);
-  if (theme) db.profile.settings.theme = String(theme);
+  if (lang) ctx().db.profile.settings.lang = String(lang);
+  if (theme) ctx().db.profile.settings.theme = String(theme);
   return state(req);
 }));
 app.post("/api/rewards", route((req) => {
   const title = String(req.body.title || "").trim(), xp = Math.max(1, Number(req.body.xp) | 0);
   if (!title) throw httpError(400, "Donne un nom à ta récompense");
-  db.profile.rewards.push({ id: id(), title, xp, claimed: null });
-  db.profile.rewards.sort((a, b) => a.xp - b.xp);
+  ctx().db.profile.rewards.push({ id: id(), title, xp, claimed: null });
+  ctx().db.profile.rewards.sort((a, b) => a.xp - b.xp);
   return state(req);
 }));
 app.post("/api/rewards/:id/claim", route((req) => {
-  const r = db.profile.rewards.find((x) => x.id === req.params.id);
-  if (!r || db.profile.xp < r.xp) throw httpError(400, "Pas encore débloquée");
+  const r = ctx().db.profile.rewards.find((x) => x.id === req.params.id);
+  if (!r || ctx().db.profile.xp < r.xp) throw httpError(400, "Pas encore débloquée");
   r.claimed = today();
   return state(req);
 }));
 app.delete("/api/rewards/:id", route((req) => {
-  db.profile.rewards = db.profile.rewards.filter((x) => x.id !== req.params.id);
+  ctx().db.profile.rewards = ctx().db.profile.rewards.filter((x) => x.id !== req.params.id);
   return state(req);
 }));
 

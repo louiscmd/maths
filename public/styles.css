@@ -178,3 +178,12 @@ select { margin: 6px 0 14px; }
 .status .good, .good-text { color: var(--good); }
 .warn-text { color: var(--warn); }
 @media (max-width: 860px) { .keyrow { flex-wrap: wrap; } }
+
+.login { max-width: 400px; margin: 40px auto; display: flex; flex-direction: column; gap: 14px; }
+.big-brand { font-size: 26px; }
+.tabs { display: flex; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+.tabs button { flex: 1; background: none; border: none; color: var(--muted); padding: 8px; border-radius: 8px; font: 600 14px Inter, sans-serif; cursor: pointer; }
+.tabs button.on { background: var(--panel2); color: var(--text); }
+#auth { display: flex; flex-direction: column; gap: 6px; }
+#auth input { margin-bottom: 8px; }
+.wide-btn { justify-content: center; margin-top: 6px; }
