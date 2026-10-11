@@ -136,11 +136,19 @@ function shell() {
   $("#tabbar").innerHTML = links;
   const p = S.profile, L = lvl(), N = next();
   const pct = N ? ((p.xp - L.xp) / (N.xp - L.xp)) * 100 : 100;
-  $("#hud").innerHTML = `
-    <span class="streak-pill" title="Série de jours : +5 % d'XP par jour, jusqu'à +50 %">🔥 ${p.streak.count} jour${p.streak.count > 1 ? "s" : ""}</span>
+  const streak = `🔥 ${p.streak.count} jour${p.streak.count > 1 ? "s" : ""}`, xpLine = `${fmt(p.xp)} XP${N ? ` · encore ${fmt(N.xp - p.xp)} → ${N.rank}` : ""}`;
+  const bar = $("#hud .xpbar span");
+  if (bar) {
+    // Update in place so the bar's width transition animates the gain.
+    bar.style.width = `${pct}%`;
+    $("#hud .rank-name").textContent = L.rank;
+    $("#hud .xp").textContent = xpLine;
+    $("#hud .streak-pill").textContent = streak;
+  } else $("#hud").innerHTML = `
+    <span class="streak-pill" title="Série de jours : +5 % d'XP par jour, jusqu'à +50 %">${streak}</span>
     <a href="#/career" class="rank-card"><span class="muted small">Rang</span><div class="rank-name">${L.rank}</div>
       <div class="xpbar"><span style="width:${pct}%"></span></div>
-      <span class="xp mono">${fmt(p.xp)} XP${N ? ` · encore ${fmt(N.xp - p.xp)} → ${N.rank}` : ""}</span></a>`;
+      <span class="xp mono">${xpLine}</span></a>`;
   $("#hud-mobile").innerHTML = `<span class="streak-pill">🔥 ${p.streak.count}</span><a class="tag orange" href="#/career">${L.rank} · ${fmt(p.xp)} XP</a>`;
   applyTheme();
 }
@@ -158,7 +166,7 @@ function render() {
   document.body.classList.remove("out");
   shell();
   const [, view, a, b] = location.hash.split("/");
-  if (view !== "auto" || a !== "play") stopQuiz();
+  if (view !== "auto" || a !== "play") { stopQuiz(); if (Q?.finished) Q = null; }
   if (view === "sheet") viewSheet(a);
   else if (view === "ex") viewEx(a, b);
   else if (view === "career") viewCareer();
@@ -445,8 +453,56 @@ function insertAt(t, s) {
 function celebrate(r) {
   if (!r) return;
   if (r.verdict !== "correct") return toast(r.verdict === "partial" ? "Presque — lis ce que dit Léo" : "Pas encore — lis ce que dit Léo", "warn");
-  toast(`<span class="mono big">+${r.reward.xp} XP</span>${r.reward.clean ? " · sans faute ✦" : ""}`, "good");
+  xpBurst(S.profile.xp - r.reward.xp, S.profile.xp, r.reward.clean ? "sans faute ✦ ×1,5" : "");
   levelUp(r.reward.levelUp);
+}
+
+// XP bar that slides in after a good answer: fills live, counts up, then leaves when its countdown line runs out.
+let xpfxTimer = null;
+const levelIndex = (xp) => S.levels.reduce((a, l, i) => (xp >= l.xp ? i : a), 0);
+function pctIn(xp, i) { const L = S.levels[i], N = S.levels[i + 1]; return N ? Math.min(100, ((xp - L.xp) / (N.xp - L.xp)) * 100) : 100; }
+function xpBurst(from, to, note = "") {
+  if (!(to > from)) return;
+  let el = $("#xpfx");
+  if (!el) { el = document.createElement("div"); el.id = "xpfx"; document.body.append(el); }
+  const i0 = levelIndex(from), i1 = levelIndex(to), N = S.levels[i0 + 1], LIFE = 3200;
+  el.className = "";
+  el.innerHTML = `<div class="top"><span class="spark">⚡</span><span class="rank">${S.levels[i0].rank}</span><span class="gain mono">+0 XP</span></div>
+    <div class="bar"><span style="width:${pctIn(from, i0)}%"></span></div>
+    <div class="meta"><span class="cur">${fmt(from)} XP</span><span>${note || (N ? `${N.rank} à ${fmt(N.xp)}` : "")}</span></div><i class="life"></i>`;
+  void el.offsetWidth;
+  el.classList.add("show");
+  const bar = $(".bar span", el), gain = $(".gain", el), cur = $(".cur", el);
+  const t0 = performance.now(), D = 1100;
+  const count = (t) => {
+    const k = Math.min(1, (t - t0) / D), v = Math.round(from + (to - from) * (1 - (1 - k) ** 3));
+    gain.textContent = `+${v - from} XP`; cur.textContent = `${fmt(v)} XP`;
+    if (k < 1) requestAnimationFrame(count);
+  };
+  requestAnimationFrame(count);
+  // Animation frames pause in background tabs; make sure the final numbers always land.
+  setTimeout(() => { gain.textContent = `+${to - from} XP`; cur.textContent = `${fmt(to)} XP`; }, D + 60);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (i1 === i0) return (bar.style.width = `${pctIn(to, i0)}%`);
+    // Rank up: fill to the end, flip to the new rank, then fill again from zero.
+    bar.style.width = "100%";
+    setTimeout(() => {
+      $(".rank", el).textContent = `${S.levels[i1].rank} 🎉`;
+      el.classList.add("lvl");
+      bar.style.transition = "none"; bar.style.width = "0%"; void bar.offsetWidth; bar.style.transition = "";
+      bar.style.width = `${pctIn(to, i1)}%`;
+    }, 950);
+  }));
+  const life = LIFE + (i1 > i0 ? 1200 : 0);
+  $(".life", el).animate([{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }], { duration: life, easing: "linear", fill: "forwards" });
+  clearTimeout(xpfxTimer);
+  xpfxTimer = setTimeout(() => el.classList.remove("show"), life);
+}
+// Same streak bonus the server applies (+5 % per day of streak, max +50 %), counting today's activity.
+function streakMultNow() {
+  const s = S.profile.streak, y = new Date(Date.parse(S.today) - 864e5).toISOString().slice(0, 10);
+  const c = s.lastDay === S.today ? s.count : s.lastDay === y ? s.count + 1 : 1;
+  return 1 + Math.min(c, 10) * 0.05;
 }
 function levelUp(L) {
   if (!L) return;
@@ -541,7 +597,7 @@ function startQuiz(spec) {
     skills = order.map((t) => nextSkill(t, autoStats())).sort(() => Math.random() - 0.5);
   } else if (spec.startsWith("S-") && skillById[spec.slice(2)]) skills = Array(n).fill(spec.slice(2));
   else skills = Array.from({ length: n }, () => nextSkill(spec.startsWith("T-") ? spec.slice(2) : null, autoStats()));
-  Q = { spec, mode, items: skills.map((s) => ({ q: makeQuestion(s), picked: null })), i: 0, combo: 0, best: 0, startedAt: Date.now(), finished: false, result: null };
+  Q = { spec, mode, items: skills.map((s) => ({ q: makeQuestion(s), picked: null })), i: 0, combo: 0, best: 0, pending: 0, startedAt: Date.now(), finished: false, result: null };
 }
 
 function viewQuiz(spec = "mix") {
@@ -601,7 +657,13 @@ function pickChoice(k, el) {
   if (Q.mode === "train" && it.picked !== null) return;
   it.picked = k;
   if (Q.mode === "train") {
-    if (k === it.q.answer) { Q.combo++; Q.best = Math.max(Q.best, Q.combo); confetti(el); }
+    if (k === it.q.answer) {
+      Q.combo++; Q.best = Math.max(Q.best, Q.combo); confetti(el);
+      // Mirrors the server: 4 XP + combo bonus, times the streak bonus, credited at the end of the series.
+      const before = Q.pending, m = streakMultNow();
+      Q.pending += 4 + Math.min(Math.max(Q.combo - 2, 0), 4);
+      xpBurst(S.profile.xp + Math.round(before * m), S.profile.xp + Math.round(Q.pending * m), Q.combo >= 3 ? `combo ×${Q.combo} 🔥` : "crédités en fin de série");
+    }
     else Q.combo = 0;
   }
   viewQuiz(Q.spec);
@@ -621,6 +683,7 @@ async function finishQuiz() {
   try {
     const r = await api("/api/auto/finish", { mode: Q.mode, theme: Q.spec, results, seconds: (Date.now() - Q.startedAt) / 1000 | 0 });
     Q.result = r.result;
+    if (Q.mode === "exam") xpBurst(S.profile.xp - r.result.xp, S.profile.xp, `épreuve : ${r.result.score}/${r.result.total}`);
     shell();
     levelUp(r.result.levelUp);
   } catch (e) { fail(e); Q.result = { xp: 0, score: results.filter((x) => x.ok).length, total: results.length, bestCombo: Q.best, offline: true }; }
