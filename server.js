@@ -444,6 +444,15 @@ Write in ${langOf(sheet)}. Math in LaTeX with $...$.`,
   return { ...state(req), explanation: r.text };
 }));
 
+// The student's notes / working for one question (autosaved from the notes box).
+app.post("/api/ex/:s/:e/notes", route((req) => {
+  const { ex } = findEx(req.params.s, req.params.e);
+  const st = ex.state[req.body.part];
+  if (!st) throw httpError(400, "Question introuvable");
+  st.notes = String(req.body.notes ?? "").slice(0, 5000);
+  return { ok: true };
+}));
+
 app.post("/api/ex/:s/:e/hint", route((req) => {
   const { ex } = findEx(req.params.s, req.params.e);
   const st = ex.state[req.body.part];

@@ -291,6 +291,17 @@ function viewSheet(id) {
 
 // ---------- Exercise ----------
 const drafts = {}; // typed answers survive re-renders
+const notesOpen = {}; // which notes boxes are unrolled
+// [inserted text, key label, tooltip]: the variable x is drawn in math italics so it never looks like ×.
+const SYMBOLS = [["x", "𝑥", "La variable x"], ["(", "(", "Parenthèse"], [")", ")", "Parenthèse"], ["×", "×", "Multiplier (fois)"], ["÷", "÷", "Diviser"], ["/", "/", "Fraction : 3/4"], ["^", "^", "Puissance : x^3"], ["²", "²", "Au carré"], ["³", "³", "Au cube"], ["√", "√", "Racine carrée"], ["π", "π", "Pi"], ["≤", "≤", "Inférieur ou égal"], ["≥", "≥", "Supérieur ou égal"], ["≠", "≠", "Différent de"], ["±", "±", "Plus ou moins"], ["∞", "∞", "Infini"], [";", ";", "Séparer plusieurs solutions"], ["°", "°", "Degré"]];
+function notesBox(ex, i, title) {
+  const key = `${ex.id}:${i}`, text = drafts[key]?.w ?? ex.state[i].notes ?? "";
+  const open = notesOpen[key] ?? !!text;
+  return `<details class="notes-box" ${open ? "open" : ""}>
+    <summary><span class="nb-title">${title}</span><span class="muted small">${text ? `${text.split("\n").filter(Boolean).length} ligne${text.split("\n").filter(Boolean).length > 1 ? "s" : ""}` : "Développe ta réponse ici — Léo s'en sert pour trouver où ça coince"}</span><span class="saved small"></span><span class="chev">▾</span></summary>
+    <textarea class="work" rows="6" spellcheck="false" placeholder="Une étape par ligne, par exemple :&#10;B(x) = 48x − (1200 + 18x)&#10;B(x) = 30x − 1200"></textarea>
+  </details>`;
+}
 const explanations = {}; // "Je comprends pas" answers from Léo, per question/step
 let examTimer = null;
 
@@ -339,12 +350,30 @@ async function viewEx(sid, eid) {
   ex.parts.forEach((p, i) => {
     const el = $(`#part-${i}`), key = `${eid}:${i}`;
     if (!el) return;
-    const ans = $(".ans", el), work = $(".work", el);
+    const ans = $(".ans", el), work = $(".work", el), box = $(".notes-box", el);
+    // Notes: saved to the account a moment after you stop typing, and read by Léo when you check.
+    work.value = drafts[key]?.w ?? ex.state[i].notes ?? "";
+    box.ontoggle = () => (notesOpen[key] = box.open);
+    let saveTimer = null;
+    work.oninput = () => {
+      drafts[key] = { ...drafts[key], w: work.value };
+      const flag = $(".saved", el);
+      flag.textContent = "…";
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => fetch(`${base}/notes`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify({ part: i, notes: work.value }) })
+        .then((r) => { flag.textContent = r.ok ? "Enregistré ✓" : "Non enregistré"; }, () => (flag.textContent = "Non enregistré")), 700);
+    };
     if (ans) {
-      ans.value = drafts[key]?.a || ""; work.value = drafts[key]?.w || "";
-      if (drafts[key]?.w) $(".work-box", el).open = true;
-      ans.oninput = work.oninput = () => (drafts[key] = { a: ans.value, w: work.value });
-      el.querySelectorAll(".sym button").forEach((b) => (b.onclick = () => { const t = document.activeElement === work ? work : ans; insertAt(t, b.dataset.s); t.dispatchEvent(new Event("input")); }));
+      ans.value = drafts[key]?.a || "";
+      ans.oninput = () => (drafts[key] = { ...drafts[key], a: ans.value });
+      // Symbols go into whichever box you were last typing in; mousedown is cancelled so focus stays there.
+      let target = ans;
+      ans.onfocus = () => (target = ans);
+      work.onfocus = () => (target = work);
+      el.querySelectorAll(".sym button").forEach((b) => {
+        b.onmousedown = (e) => e.preventDefault();
+        b.onclick = () => { if (target === work) box.open = true; insertAt(target, b.dataset.s); target.dispatchEvent(new Event("input")); };
+      });
       // Block body on purpose: returning false from an on-handler would cancel every keypress.
       ans.onkeydown = (e) => { if (e.key === "Enter") $(".check", el).click(); };
       $(".check", el).onclick = async (e) => {
@@ -429,14 +458,15 @@ function partHtml(ex, p, i) {
       ${st.solved && st.feedback?.text ? coach(md(st.feedback.text), "good", "Léo · Juste !") : ""}
       <div class="final"><span class="lbl">Réponse</span><div class="md">${md(p.answer || "")}</div></div>
       <details ${st.revealed ? "open" : ""}><summary class="link">Voir la correction pas à pas</summary><div style="margin-top:12px">${stepsHtml(ex, p, i)}</div></details>
-      ${p.commonMistake ? `<div class="mistake">⚠️ <b>Le piège classique :</b> ${md(p.commonMistake)}</div>` : ""}` : `
+      ${p.commonMistake ? `<div class="mistake">⚠️ <b>Le piège classique :</b> ${md(p.commonMistake)}</div>` : ""}
+      ${notesBox(ex, i, "📝 Mes notes")}` : `
       ${fb}
+      <div class="sym">${SYMBOLS.map(([s, label, tip]) => `<button data-s="${s}" tabindex="-1" title="${tip}" class="${s === "x" ? "var" : ""}">${label}</button>`).join("")}</div>
       <div class="answer-row">
         <input class="ans" placeholder="Ta réponse — écris-la comme tu veux : x = 3/2, 1,5, S = {2 ; 5}…" autocomplete="off" />
         <button class="orange-btn check">Vérifier</button>
       </div>
-      <div class="sym">${["√", "²", "³", "π", "≤", "≥", "≠", "±", "×", "÷", "∞", "°", "^", "/", ";"].map((s) => `<button data-s="${s}" tabindex="-1">${s}</button>`).join("")}</div>
-      <details class="work-box"><summary>Montrer mes calculs (Léo te dira OÙ ça coince)</summary><textarea class="work" rows="4" placeholder="Une étape par ligne…"></textarea></details>
+      ${notesBox(ex, i, "📝 Brouillon & notes")}
       ${ex.exam ? "" : `<div class="actions">
         ${st.hintsUsed < 3 ? `<button class="ghost hint">💡 Indice ${st.hintsUsed + 1}/3</button>` : ""}
         ${hasAi() && !ex.demo && !qExplain ? `<button class="ghost" data-explain="q">🤔 Je comprends pas la question</button>` : ""}
