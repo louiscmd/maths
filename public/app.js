@@ -337,7 +337,8 @@ async function viewEx(sid, eid) {
       if (drafts[key]?.w) $(".work-box", el).open = true;
       ans.oninput = work.oninput = () => (drafts[key] = { a: ans.value, w: work.value });
       el.querySelectorAll(".sym button").forEach((b) => (b.onclick = () => { const t = document.activeElement === work ? work : ans; insertAt(t, b.dataset.s); t.dispatchEvent(new Event("input")); }));
-      ans.onkeydown = (e) => e.key === "Enter" && $(".check", el).click();
+      // Block body on purpose: returning false from an on-handler would cancel every keypress.
+      ans.onkeydown = (e) => { if (e.key === "Enter") $(".check", el).click(); };
       $(".check", el).onclick = async (e) => {
         const btn = e.currentTarget;
         busy(btn, "Léo vérifie…");
