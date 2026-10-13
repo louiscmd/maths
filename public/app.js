@@ -293,7 +293,33 @@ function viewSheet(id) {
 const drafts = {}; // typed answers survive re-renders
 const notesOpen = {}; // which notes boxes are unrolled
 // [inserted text, key label, tooltip]: the variable x is drawn in math italics so it never looks like ×.
-const SYMBOLS = [["x", "x", "La variable x (≠ ×, le signe fois)"], ["(", "(", "Parenthèse"], [")", ")", "Parenthèse"], ["×", "×", "Multiplier (fois)"], ["÷", "÷", "Diviser"], ["/", "/", "Fraction : 3/4"], ["^", "^", "Puissance : x^3"], ["²", "²", "Au carré"], ["³", "³", "Au cube"], ["√", "√", "Racine carrée"], ["π", "π", "Pi"], ["≤", "≤", "Inférieur ou égal"], ["≥", "≥", "Supérieur ou égal"], ["≠", "≠", "Différent de"], ["±", "±", "Plus ou moins"], ["∞", "∞", "Infini"], [";", ";", "Séparer plusieurs solutions"], ["°", "°", "Degré"]];
+// Keyboard groups. "calc" and "pow" show on number/expression lines, "set" on ensemble lines, all of them in the notes.
+const SYMBOLS = {
+  calc: [["x", "x", "La variable x (≠ ×, le signe fois)"], ["(", "(", "Parenthèse"], [")", ")", "Parenthèse"], ["×", "×", "Multiplier (fois)"], ["÷", "÷", "Diviser"], ["/", "/", "Fraction : 3/4"], ["√", "√", "Racine carrée"], ["π", "π", "Pi"], ["≤", "≤", "Inférieur ou égal"], ["≥", "≥", "Supérieur ou égal"], ["≠", "≠", "Différent de"], ["±", "±", "Plus ou moins"], ["∞", "∞", "Infini"], [";", ";", "Séparer plusieurs solutions"], ["°", "°", "Degré"]],
+  pow: [["²", "²", "Au carré"], ["³", "³", "Au cube"], ["⁴", "⁴", "Puissance 4"], ["⁵", "⁵", "Puissance 5"], ["⁶", "⁶", "Puissance 6"], ["⁷", "⁷", "Puissance 7"], ["⁸", "⁸", "Puissance 8"], ["⁹", "⁹", "Puissance 9"], ["¹⁰", "¹⁰", "Puissance 10"], ["⁻", "⁻", "Exposant négatif : x⁻¹"], ["^", "^", "Autre puissance : x^12"]],
+  set: [["ℝ", "ℝ", "Les réels"], ["ℕ", "ℕ", "Les entiers naturels"], ["ℤ", "ℤ", "Les entiers relatifs"], ["ℚ", "ℚ", "Les rationnels"], ["]", "]", "Crochet"], ["[", "[", "Crochet"], [";", ";", "Séparateur"], ["-∞", "−∞", "Moins l'infini"], ["+∞", "+∞", "Plus l'infini"], ["∪", "∪", "Union"], ["∩", "∩", "Intersection"], ["∖", "∖", "Privé de : ℝ∖{0}"], ["{", "{", "Accolade"], ["}", "}", "Accolade"], ["∅", "∅", "Ensemble vide"], ["∈", "∈", "Appartient à"], ["∉", "∉", "N'appartient pas à"], ["⊂", "⊂", "Inclus dans"], ["⁺", "⁺", "Positifs : ℝ⁺"], ["*", "*", "Sans zéro : ℝ*"]],
+};
+function keyboard(mode) {
+  const btn = (g) => ([s, label, tip]) => `<button data-s="${s}" data-g="${g}" tabindex="-1" title="${tip}" class="${s === "x" ? "var" : g === "pow" ? "sup" : ""}">${label}</button>`;
+  return `<div class="sym" data-mode="${mode}">
+    ${SYMBOLS.calc.map(btn("calc")).join("")}<i class="sep" data-g="pow"></i>${SYMBOLS.pow.map(btn("pow")).join("")}
+    <i class="sep" data-g="set"></i>${SYMBOLS.set.map(btn("set")).join("")}
+    <button class="more" tabindex="-1" title="Afficher / masquer les autres symboles">⋯</button></div>`;
+}
+// One answer line. Its kind (nombre, expression, ensemble, texte) sets the placeholder and the keyboard.
+const PLACEHOLDER = { nombre: "ex : 40   2,5   3/4", expression: "ex : 30x − 1200   x⁵ + 2x", ensemble: "ex : ]2 ; +∞[   ℝ∖{3}   [0 ; 1] ∪ [4 ; 5]", texte: "Ta phrase / justification" };
+function fieldRow(f, k, st, n) {
+  const ok = st.attempts && st.fieldsOk ? st.fieldsOk[k] : null;
+  const mark = n > 1 && ok !== null ? `<span class="fmark ${ok ? "good" : "bad"}">${ok ? "✓" : "✗"}</span>` : "";
+  const ph = !f.label && n === 1 && !f.hint ? "Ta réponse — écris-la comme tu veux : x = 3/2, 1,5, S = {2 ; 5}…" : PLACEHOLDER[f.kind] || PLACEHOLDER.expression;
+  return `<div class="field-row kind-${f.kind} ${ok === true && n > 1 ? "ok" : ok === false && n > 1 ? "ko" : ""}">
+    ${f.label ? `<span class="flabel md">${md(f.label)}</span>` : ""}
+    <div class="fbox">
+      <input class="ans" data-k="${k}" data-kind="${f.kind}" placeholder="${esc(ph)}" autocomplete="off" spellcheck="false" />
+      ${f.hint || f.kind === "ensemble" ? `<span class="fhint">${f.kind === "ensemble" ? "🔣 ensemble · " : ""}${esc(f.hint || "")}</span>` : ""}
+    </div>${mark}
+  </div>`;
+}
 function notesBox(ex, i, title) {
   const key = `${ex.id}:${i}`, text = drafts[key]?.w ?? ex.state[i].notes ?? "";
   const open = notesOpen[key] ?? !!text;
@@ -350,7 +376,7 @@ async function viewEx(sid, eid) {
   ex.parts.forEach((p, i) => {
     const el = $(`#part-${i}`), key = `${eid}:${i}`;
     if (!el) return;
-    const ans = $(".ans", el), work = $(".work", el), box = $(".notes-box", el);
+    const inputs = [...el.querySelectorAll(".ans")], work = $(".work", el), box = $(".notes-box", el);
     // Notes: saved to the account a moment after you stop typing, and read by Léo when you check.
     work.value = drafts[key]?.w ?? ex.state[i].notes ?? "";
     box.ontoggle = () => (notesOpen[key] = box.open);
@@ -363,24 +389,31 @@ async function viewEx(sid, eid) {
       saveTimer = setTimeout(() => fetch(`${base}/notes`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify({ part: i, notes: work.value }) })
         .then((r) => { flag.textContent = r.ok ? "Enregistré ✓" : "Non enregistré"; }, () => (flag.textContent = "Non enregistré")), 700);
     };
-    if (ans) {
-      ans.value = drafts[key]?.a || "";
-      ans.oninput = () => (drafts[key] = { ...drafts[key], a: ans.value });
-      // Symbols go into whichever box you were last typing in; mousedown is cancelled so focus stays there.
-      let target = ans;
-      ans.onfocus = () => (target = ans);
-      work.onfocus = () => (target = work);
-      el.querySelectorAll(".sym button").forEach((b) => {
+    if (inputs.length) {
+      const saved = drafts[key]?.a || ex.state[i].lastAnswers || [];
+      const sym = $(".sym", el), modeOf = (inp) => (inp.dataset.kind === "ensemble" ? "set" : "expr");
+      // Symbols go into whichever box you were last typing in; the keyboard follows that box's kind.
+      let target = inputs[0];
+      inputs.forEach((inp, k) => {
+        inp.value = saved[k] || "";
+        inp.oninput = () => (drafts[key] = { ...drafts[key], a: inputs.map((x) => x.value) });
+        inp.onfocus = () => { target = inp; sym.dataset.mode = modeOf(inp); };
+        // Block body on purpose: returning false from an on-handler would cancel every keypress.
+        inp.onkeydown = (e) => { if (e.key === "Enter") { if (k < inputs.length - 1) inputs[k + 1].focus(); else $(".check", el).click(); } };
+      });
+      work.onfocus = () => { target = work; sym.dataset.mode = "all"; };
+      sym.querySelectorAll("button[data-s]").forEach((b) => {
         b.onmousedown = (e) => e.preventDefault();
         b.onclick = () => { if (target === work) box.open = true; insertAt(target, b.dataset.s); target.dispatchEvent(new Event("input")); };
       });
-      // Block body on purpose: returning false from an on-handler would cancel every keypress.
-      ans.onkeydown = (e) => { if (e.key === "Enter") $(".check", el).click(); };
+      const more = $(".more", sym);
+      more.onmousedown = (e) => e.preventDefault();
+      more.onclick = () => (sym.dataset.mode = sym.dataset.mode === "all" ? (target === work ? "all" : modeOf(target)) : "all");
       $(".check", el).onclick = async (e) => {
         const btn = e.currentTarget;
         busy(btn, "Léo vérifie…");
         try {
-          const r = await api(`${base}/check`, { part: i, answer: ans.value, work: work.value });
+          const r = await api(`${base}/check`, { part: i, answers: inputs.map((x) => x.value), work: work.value });
           if (r.result?.verdict === "correct") confetti(btn);
           celebrate(r.result);
           render();
@@ -413,7 +446,8 @@ async function viewEx(sid, eid) {
   }
 
   // First visit: Léo solves the exercise and prepares hints, steps and the business lens in the background.
-  if (!ex.prepared && hasAi()) {
+  // (Also re-prepares exercises from before answer frames existed, if not started yet.)
+  if ((!ex.prepared || (ex.legacy && !exStarted(ex))) && hasAi()) {
     try { await api(`${base}/prepare`, {}); if (location.hash === `#/ex/${sid}/${eid}`) render(); }
     catch (e) { const l = $("#lens"); if (l) l.innerHTML = `<h3>💼 Angle business</h3><p class="small bad-text">${esc(e.message)}</p>`; }
   }
@@ -456,16 +490,16 @@ function partHtml(ex, p, i) {
     ${hints}
     ${closed ? `
       ${st.solved && st.feedback?.text ? coach(md(st.feedback.text), "good", "Léo · Juste !") : ""}
-      <div class="final"><span class="lbl">Réponse</span><div class="md">${md(p.answer || "")}</div></div>
+      <div class="final"><span class="lbl">Réponse</span><div class="final-rows">${p.fields.some((f) => f.label)
+        ? p.fields.map((f) => `<div class="md">${md(f.label)} ${md(/\$/.test(f.answer || "") ? f.answer : `$${f.answer || ""}$`)}</div>`).join("")
+        : `<div class="md">${md(p.answer || "")}</div>`}</div></div>
       <details ${st.revealed ? "open" : ""}><summary class="link">Voir la correction pas à pas</summary><div style="margin-top:12px">${stepsHtml(ex, p, i)}</div></details>
       ${p.commonMistake ? `<div class="mistake">⚠️ <b>Le piège classique :</b> ${md(p.commonMistake)}</div>` : ""}
       ${notesBox(ex, i, "📝 Mes notes")}` : `
       ${fb}
-      <div class="sym">${SYMBOLS.map(([s, label, tip]) => `<button data-s="${s}" tabindex="-1" title="${tip}" class="${s === "x" ? "var" : ""}">${label}</button>`).join("")}</div>
-      <div class="answer-row">
-        <input class="ans" placeholder="Ta réponse — écris-la comme tu veux : x = 3/2, 1,5, S = {2 ; 5}…" autocomplete="off" />
-        <button class="orange-btn check">Vérifier</button>
-      </div>
+      ${keyboard(p.fields[0]?.kind === "ensemble" ? "set" : "expr")}
+      <div class="fields">${p.fields.map((f, k) => fieldRow(f, k, st, p.fields.length)).join("")}</div>
+      <div class="row"><button class="orange-btn check">Vérifier${p.fields.length > 1 ? ` les ${p.fields.length} lignes` : ""}</button></div>
       ${notesBox(ex, i, "📝 Brouillon & notes")}
       ${ex.exam ? "" : `<div class="actions">
         ${st.hintsUsed < 3 ? `<button class="ghost hint">💡 Indice ${st.hintsUsed + 1}/3</button>` : ""}

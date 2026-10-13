@@ -28,13 +28,16 @@ function latexToPlain(s) {
     .replace(/\\(,|;|!|:| |quad|qquad)/g, " ");
 }
 
+// Superscript keys (x², x¹⁰, x⁻¹) → x^(…)
+const SUP = { "⁻": "-", "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4", "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9" };
+
 function clean(s) {
   s = latexToPlain(String(s).replace(/\$/g, ""));
   return s
     .replace(/[×·⋅∙]/g, "*")
     .replace(/÷/g, "/")
     .replace(/[−–—]/g, "-")
-    .replace(/²/g, "^2").replace(/³/g, "^3")
+    .replace(/[⁻⁰¹²³⁴⁵⁶⁷⁸⁹]+/g, (m) => `^(${[...m].map((c) => SUP[c]).join("")})`)
     .replace(/√\s*\(/g, "sqrt(")
     .replace(/√\s*([0-9.,]+|[a-z])/gi, "sqrt($1)")
     .replace(/π/g, "pi").replace(/∞/g, "Infinity")
@@ -66,7 +69,7 @@ function item(t) {
   if (pct) exprs.push(pct[1], `(${pct[1]})/100`);
   else exprs.push(expr);
   // Strip trailing units / words ("40 supports", "12 cm", "25 €") as a fallback reading.
-  const unitless = expr.replace(/\s*(€|\$|euros?|[a-zA-Zéèêàùç]{2,}\^?\d?)(\s+[a-zA-Zéèêàùç]+)*\s*$/u, "");
+  const unitless = expr.replace(/\s*(€|\$|euros?|[a-zA-Zéèêàùç]{2,}(\^\(?\d\)?)?)(\s+[a-zA-Zéèêàùç]+)*\s*$/u, "");
   if (unitless !== expr && unitless) exprs.push(unitless);
   return { label, exprs: exprs.map(compile).filter(Boolean) };
 }
@@ -135,6 +138,110 @@ export function smartCheck(answer, accepted = []) {
     if (st.some((s) => !s.exprs.length)) continue;
     readable = true;
     if (setsMatch(st, ref)) return "correct";
+  }
+  return readable ? "different" : "unknown";
+}
+
+// ---------- Sets (ensembles) ----------
+// Compares sets written in any usual way: ℝ, R, ℝ∖{3}, ]40;+∞[, [0;2] ∪ [5;+∞[, {1;4}, ∅, ℝ⁺*…
+// Each side becomes a sorted, merged list of intervals (points are closed zero-width intervals).
+const INF = Infinity;
+function setTokens(raw) {
+  const s = String(raw).replace(/\$/g, "")
+    .replace(/\\setminus|\\backslash/g, "∖")
+    .replace(/(R|ℝ|[\]\[}])\s*\\\{/g, "$1∖{") // "R\{3}" typed by hand = R minus {3}
+    .replace(/([\]\[}R])\s*[uU]\s*([\[\]{R])/g, "$1∪$2"); // "]a;b[U]c;d[" = union
+  return latexToPlain(s)
+    .replace(/\\mathbb\s*\{?R\}?|ℝ/g, "R").replace(/\\mathbb\s*\{?N\}?|ℕ/g, "N")
+    .replace(/\\mathbb\s*\{?Z\}?|ℤ/g, "Z").replace(/\\mathbb\s*\{?Q\}?|ℚ/g, "Q")
+    .replace(/\\varnothing|\\emptyset|∅|\bvide\b/gi, "∅")
+    .replace(/\\cup|∪|\s[uU]\s/g, "∪").replace(/\\cap|∩/g, "∩")
+    .replace(/\\\{/g, "{").replace(/\\\}/g, "}")
+    .replace(/\\setminus|\\backslash|∖|\\/g, "∖")
+    .replace(/\\infty|∞|\binf(inity)?\b/gi, "∞")
+    .replace(/[−–—]/g, "-")
+    .replace(/⁺/g, "+").replace(/⁻/g, "-")
+    .replace(/^\s*(S|D|D_f|E|I)\s*=\s*/i, "")
+    .replace(/\s+/g, "");
+}
+function evalNum(t) {
+  if (/^\+?∞$/.test(t)) return INF;
+  if (t === "-∞") return -INF;
+  const c = compile(clean(t));
+  if (!c || c.vars.size) return NaN;
+  return num(safe(c.f, {}));
+}
+// "2;5" or "2,5;3" (decimal commas when ; is used) or "1,4" (comma as separator)
+function splitList(s) {
+  return s.includes(";") ? s.split(";").map((x) => x.replace(/(\d),(\d)/g, "$1.$2")) : s.split(",");
+}
+// One term → { iv: [[lo, loClosed, hi, hiClosed]], pts: [], minus: [] } or null
+function parseTerm(t) {
+  if (t === "∅" || t === "{}") return { iv: [], pts: [] };
+  let m = /^R(\+|-)?(\*)?(\+|-)?(?:∖\{(.+)\})?$/.exec(t);
+  if (m) {
+    const sign = m[1] || m[3], star = !!m[2];
+    const base = sign === "+" ? [[0, !star, INF, false]] : sign === "-" ? [[-INF, false, 0, !star]] : [[-INF, false, INF, false]];
+    let minus = star && !sign ? [0] : [];
+    if (m[4]) { const pts = splitList(m[4]).map(evalNum); if (pts.some(Number.isNaN)) return null; minus = minus.concat(pts); }
+    return { iv: base, pts: [], minus };
+  }
+  m = /^([[\]])(.+)([[\]])$/.exec(t);
+  if (m) {
+    // "]2,5;3]" → ";" separates, commas are decimals; "]2,3]" → the comma separates.
+    const inner = m[2], parts = inner.includes(";") ? inner.split(";") : inner.split(",");
+    if (parts.length !== 2) return null;
+    const [a, b] = parts.map((x) => evalNum(x.replace(/(\d),(\d)/g, "$1.$2")));
+    if (Number.isNaN(a) || Number.isNaN(b) || a > b) return null;
+    return { iv: [[a, m[1] === "[", b, m[3] === "]"]], pts: [] };
+  }
+  m = /^\{(.*)\}$/.exec(t);
+  if (m) { const pts = splitList(m[1]).map(evalNum); return pts.some(Number.isNaN) ? null : { iv: [], pts }; }
+  return null;
+}
+function parseSet(raw) {
+  const s = setTokens(raw);
+  if (!s || /[NZQ∩]/.test(s)) return null;
+  let iv = [], pts = [], minus = [];
+  for (const t of s.split("∪")) {
+    const p = parseTerm(t);
+    if (!p) return null;
+    iv = iv.concat(p.iv); pts = pts.concat(p.pts); minus = minus.concat(p.minus || []);
+  }
+  for (const x of minus) {
+    iv = iv.flatMap(([a, ac, b, bc]) => (x < a || x > b || (x === a && !ac) || (x === b && !bc)) ? [[a, ac, b, bc]]
+      : [[a, ac, x, false], [x, false, b, bc]].filter(([l, lc, h, hc]) => l < h || (l === h && lc && hc)));
+    pts = pts.filter((p) => Math.abs(p - x) > 1e-12);
+  }
+  for (const p of pts) iv.push([p, true, p, true]);
+  iv.sort((u, v) => u[0] - v[0] || v[1] - u[1]);
+  const out = [];
+  for (const cur of iv) {
+    const last = out[out.length - 1];
+    const touches = last && (cur[0] < last[2] || (Math.abs(cur[0] - last[2]) < 1e-12 && (last[3] || cur[1])));
+    if (!touches) { out.push([...cur]); continue; }
+    if (cur[2] > last[2]) { last[2] = cur[2]; last[3] = cur[3]; }
+    else if (cur[2] === last[2]) last[3] = last[3] || cur[3];
+  }
+  return out;
+}
+const sameSet = (A, B) => A.length === B.length && A.every((a, i) => {
+  const b = B[i], eq = (x, y) => x === y || Math.abs(x - y) <= 1e-9 * (1 + Math.abs(y));
+  return eq(a[0], b[0]) && eq(a[2], b[2]) && (a[0] === -INF || a[1] === b[1]) && (a[2] === INF || a[3] === b[3]);
+});
+// Like smartCheck, for sets: "correct" | "different" | "unknown". ℕ, ℤ, ℚ are compared as written.
+export function setCheck(answer, accepted = []) {
+  if (!accepted?.length || !String(answer).trim()) return "unknown";
+  const st = setTokens(answer);
+  if (accepted.some((a) => setTokens(a) === st)) return "correct";
+  const A = parseSet(answer);
+  if (!A) return "unknown";
+  let readable = false;
+  for (const a of accepted) {
+    const B = parseSet(a);
+    if (!B) continue;
+    readable = true;
+    if (sameSet(A, B)) return "correct";
   }
   return readable ? "different" : "unknown";
 }

@@ -17,6 +17,10 @@ La progression est enregistrée dans `data/`.
 - Clé Anthropic : chacun colle la sienne dans **Réglages → Clés** (gardée dans le navigateur). Ne mets **pas** `ANTHROPIC_API_KEY` dans Vercel si l'URL est publique : n'importe qui pourrait utiliser tes crédits.
 - Sans Supabase, Vercel efface la progression au redémarrage.
 
+## Cadres de réponse
+
+Léo analyse chaque question et crée une ligne par chose à rendre (ex. « calculer f'(x) et donner l'ensemble » → une ligne `f'(x) =` et une ligne ensemble). Chaque ligne a un type : nombre, expression, ensemble (clavier d'ensembles uniquement) ou texte. Chaque ligne est corrigée séparément (✓ / ✗).
+
 ## Correction des réponses
 
 1. Vérification instantanée et gratuite ([answers.js](answers.js)) : `2,5` = `5/2`, `x=2 ou x=3` = `S={3;2}`, `√2/2` = `1/√2`, `30x−1200` = `−1200+30×x`, LaTeX, unités, arrondis…

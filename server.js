@@ -4,13 +4,13 @@ import crypto from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import Anthropic from "@anthropic-ai/sdk";
 import { createStore } from "./store.js";
-import { smartCheck } from "./answers.js";
+import { smartCheck, setCheck } from "./answers.js";
 
 try { process.loadEnvFile(".env"); } catch {}
 
 const PORT = process.env.PORT || 3333;
 const MODEL = "claude-opus-5-5";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const store = await createStore();
 
 // ---------- Career ladder ----------
@@ -167,10 +167,24 @@ const COACH_VOICE = `You are Léo, the student's friendly coach: like a cool old
 - Show the chain of reasoning with arrows: "48 € la vente − 18 € de matériaux → 30 € qui restent par support".
 - Warm and encouraging, never condescending, never fake hype. At most one emoji per message.`;
 
+// Answer frame: one box per distinct result the question asks for (designed by Léo for each question).
+const FIELD = obj({
+  label: { ...str, description: "Short prefix shown before the box, math in $…$: \"$f'(x) =$\", \"$S =$\", \"$a =$\", \"$\\\mathcal{D}_f =$\", \"Réponse :\"" },
+  kind: { type: "string", enum: ["nombre", "expression", "ensemble", "texte"], description: "nombre: one value · expression: a formula/function/equation of a line · ensemble: any set (solution set, domain, interval, union, ℝ privé de…) · texte: a sentence/justification, only when there is no computable result" },
+  hint: { ...str, description: "3-8 words telling what goes in this box, e.g. « la dérivée, sous forme développée », « un intervalle ou une réunion d'intervalles »" },
+  answer: { ...str, description: "Expected content of this box, LaTeX without $" },
+  accept: { ...arr(str), description: "Machine-checkable forms of this box's answer. nombre/expression: ONE ENTRY PER VALUE, plain text with * ^ / sqrt() pi exp() log() and '.' decimals, e.g. ['30*x-1200'], ['sqrt(2)/2'], ['x=1','y=2']. ensemble: canonical set strings with R, ]a;b[ / [a;b], U for union, R\\\{a;b} for ℝ privé de, {a;b} for a finite set, vide for ∅, inf for ∞, e.g. ']40;+inf[', 'R\\\{3}', '[0;2]U[5;+inf[', '{-1;4}'. Exact values. texte: []" },
+  formMatters: { type: "boolean", description: "true if the question demands a specific form for THIS box that an equivalent value would not satisfy: factoriser, développer, réduire, simplifier, forme canonique, valeur exacte, arrondir à…, écriture scientifique, fraction irréductible" },
+});
+const FIELD_RULES = `ANSWER FRAME — for each part, analyse exactly what the student must hand in and design "fields", one box per distinct result:
+- Two things asked → two boxes. « Calculer f'(x) et donner l'ensemble de dérivabilité » → [{label "$f'(x) =$", kind expression}, {label "Ensemble de dérivabilité :", kind ensemble}]. « Déterminer a et b » → [$a =$, $b =$]. « Calculer f(2) puis résoudre f(x) = 0 » → [$f(2) =$ nombre, $S =$ ensemble].
+- Any set (solutions of an equation/inequation, domain, interval, union, ℝ privé de…) gets its own box of kind ensemble, so the student writes it with set notation only.
+- « Résoudre une (in)équation » → one ensemble box $S =$. A single value → nombre. A formula/function → expression.
+- Never split one expression into pieces. Usually 1 box, at most 4. Pure justification/proof/sentence → one texte box.`;
+
 const PREP_PART = obj({
-  answer: { ...str, description: "Final answer, concise, LaTeX allowed" },
-  accept: { ...arr(str), description: "Machine-checkable plain-text forms of the final answer, ONE ENTRY PER SOLUTION/VALUE, using * ^ / sqrt() pi exp() log() and '.' decimals. Examples: ['x=2','x=-3'] for two solutions; ['30*x-1200'] for an expression; ['sqrt(2)/2']; ['x=1','y=2'] for a system. Exact values when possible. Empty array if the answer is not a value or expression (proof, justification, sentence, graph, interval, inequality, table)." },
-  formMatters: { type: "boolean", description: "true if the question demands a specific form that an equivalent value would not satisfy: factoriser, développer, réduire, simplifier, forme canonique, valeur exacte, arrondir/donner une valeur approchée à ..., écriture scientifique, fraction irréductible." },
+  answer: { ...str, description: "Final answer of the whole part, concise, LaTeX allowed (shown once the part is done)" },
+  fields: { ...arr(FIELD), description: "The answer frame: 1 to 4 boxes, see ANSWER FRAME rules" },
   hints: { ...arr(str), description: "Exactly 3 hints in Léo's voice (1-3 short sentences each): 1) nudge — what to notice, with a tangible picture, 2) method — which tool and how to set it up, 3) first concrete step worked out with arrows, stopping well before the answer" },
   steps: { ...arr(obj({
     say: { ...str, description: "What we do in this step and WHY, in Léo's voice, 1-2 short sentences, arrows welcome" },
@@ -188,9 +202,17 @@ const PREP_SCHEMA = obj({
   }),
 });
 
-async function prepare(req, sheetId, exId) {
+// Older exercises were prepared with a single answer per part; they get one generic box.
+function fieldsOf(p) {
+  if (p.fields?.length) return p.fields;
+  return [{ label: "", kind: "expression", hint: "", answer: p.answer || "", accept: p.accept || [], formMatters: !!p.formMatters }];
+}
+const isLegacy = (ex) => ex.prepared && !ex.demo && ex.parts.some((p) => !p.fields?.length);
+const isStarted = (ex) => ex.state.some((s) => s.attempts || s.hintsUsed || s.revealed);
+
+async function prepare(req, sheetId, exId, force = false) {
   let { sheet, ex } = findEx(sheetId, exId);
-  if (ex.prepared) return;
+  if (ex.prepared && !force) return;
   const r = await ask(req, {
     effort: "high",
     system: `${COACH_VOICE}
@@ -198,6 +220,8 @@ async function prepare(req, sheetId, exId) {
 You are preparing an official exercise for a student who is struggling and wants real progress.
 Solve every part carefully FIRST, then verify (substitute back, check domain, units, signs). Accuracy matters more than anything — friendly tone never replaces rigour.
 Hints climb a ladder and never give away the final answer. Solution steps are small enough for a struggling student to follow, using French school conventions and notation (virgule décimale, S = {…}, etc.).
+
+${FIELD_RULES}
 The business lens shows honestly where this exact math shows up in business (pricing, margins, growth, break-even, interest, forecasting, logistics, statistics...). If the link is weak, pick the most honest application rather than forcing one.
 Write everything in ${langOf(sheet)} (except the "accept" field, which is plain machine-readable math). Return one entry in "parts" per part, in order.`,
     content: [
@@ -208,7 +232,11 @@ Write everything in ${langOf(sheet)} (except the "accept" field, which is plain 
   });
   await reload();
   ({ ex } = findEx(sheetId, exId));
-  ex.parts.forEach((p, i) => Object.assign(p, r.parts[i] || {}));
+  ex.parts.forEach((p, i) => {
+    Object.assign(p, r.parts[i] || {});
+    p.fields = (p.fields || []).slice(0, 4);
+    delete p.accept; delete p.formMatters; // now per box
+  });
   ex.businessLens = r.businessLens;
   ex.coachIntro = r.coachIntro;
   ex.prepared = true;
@@ -292,10 +320,12 @@ app.get("/images/:name", async (req, res) => {
 function publicEx(ex) {
   return {
     ...ex,
+    legacy: isLegacy(ex),
     parts: ex.parts.map((p, i) => {
       const st = ex.state[i], open = st.solved || st.revealed;
       return {
         label: p.label, prompt: p.prompt,
+        fields: fieldsOf(p).map((f) => ({ label: f.label, kind: f.kind, hint: f.hint || "", answer: open ? f.answer : undefined })),
         hints: (p.hints || []).slice(0, st.hintsUsed),
         answer: open ? p.answer : undefined,
         solution: open ? p.solution : undefined,
@@ -354,56 +384,74 @@ app.delete("/api/sheets/:id", route(async (req) => {
 }));
 
 app.post("/api/ex/:s/:e/prepare", route(async (req) => {
-  await prepare(req, req.params.s, req.params.e);
+  const { ex } = findEx(req.params.s, req.params.e);
+  // Exercises prepared before answer frames existed get re-prepared, as long as they aren't started.
+  await prepare(req, req.params.s, req.params.e, isLegacy(ex) && !isStarted(ex));
   return state(req);
 }));
 
 const GRADE_SCHEMA = obj({
   verdict: { type: "string", enum: ["correct", "partial", "incorrect"] },
+  fields: { ...arr(obj({ ok: { type: "boolean" } })), description: "One entry per answer box, in order: is this box correct?" },
   feedback: str,
   mistakeType: { type: "string", enum: ["aucune", "calcul", "signe", "notion", "méthode", "lecture de l'énoncé", "incomplet", "notation"] },
 });
 
 app.post("/api/ex/:s/:e/check", route(async (req) => {
   const { s, e } = req.params, i = req.body.part;
-  const answer = String(req.body.answer || "").trim(), work = String(req.body.work || "").trim();
-  if (!answer) throw httpError(400, "Écris d'abord une réponse");
+  const work = String(req.body.work || "").trim();
   let { sheet, ex } = findEx(s, e);
   if (ex.state[i].solved || ex.state[i].revealed) throw httpError(400, "Cette question est déjà terminée");
   if (!ex.prepared) { await prepare(req, s, e); ({ sheet, ex } = findEx(s, e)); }
-  const part = ex.parts[i];
+  const part = ex.parts[i], fields = fieldsOf(part);
+  const raw = Array.isArray(req.body.answers) ? req.body.answers : [req.body.answer];
+  const answers = fields.map((_, k) => String(raw[k] ?? "").trim());
+  // Line names: as math in Léo's feedback (rendered), as plain text in error toasts (not rendered).
+  const name = (f) => f.label ? `« ${f.label.replace(/\$/g, "").replace(/\\[a-zA-Z]+/g, "").replace(/[_{}^]/g, "").replace(/\s+/g, " ").trim()} »` : "ta réponse";
+  const mathName = (f) => (f.label ? `« ${f.label} »` : "ta réponse");
+  const missing = answers.findIndex((a) => !a);
+  if (missing >= 0) throw httpError(400, fields.length > 1 ? `Remplis toutes les lignes : il manque ${name(fields[missing])}.` : "Écris d'abord une réponse");
 
-  // 1) Instant, free equivalence check: accepts any notation of the right value/expression.
-  const local = smartCheck(answer, part.accept);
+  // 1) Instant, free check of every box: any notation of the right value, expression or set is accepted.
+  const local = fields.map((f, k) => f.kind === "texte" ? "unknown" : (f.kind === "ensemble" ? setCheck : smartCheck)(answers[k], f.accept));
+  const cheers = ["Nickel, c'est exactement ça 🎯", "Bien joué ! Tu l'as eue.", "Propre. Rien à redire.", "Yes ! C'est la bonne réponse.", "Parfait → question validée."];
   let g;
-  if (local === "correct" && !part.formMatters) {
-    const cheers = ["Nickel, c'est exactement ça 🎯", "Bien joué ! Tu l'as eue.", "Propre. Rien à redire.", "Yes ! C'est la bonne réponse.", "Parfait → question validée."];
-    g = { verdict: "correct", feedback: cheers[Math.floor(Math.random() * cheers.length)], mistakeType: "aucune" };
+  if (local.every((v, k) => v === "correct" && !fields[k].formMatters)) {
+    g = { verdict: "correct", fields: fields.map(() => ({ ok: true })), feedback: cheers[Math.floor(Math.random() * cheers.length)], mistakeType: "aucune" };
   } else if (keyOf(req) && !ex.demo) {
-    // 2) Claude reads the answer and the working, judging the maths rather than the formatting.
+    // 2) Claude reads every box and the working, judging the maths rather than the formatting.
     g = await ask(req, {
       effort: "medium",
-      system: `You grade a student's answer to one part of an official math exercise (French school). You get the statement, the verified reference answer and solution.
-Judge the MATHEMATICS, never the formatting. Accept any equivalent way of writing it: decimal comma or point, fraction vs decimal, solutions in any order, "x=2 ou x=3" / "S={2;3}" / "2 et 3", with or without "x =", plain-text math (sqrt(2), x^2, 2pi), LaTeX, typos in notation that don't change the meaning, with or without units unless the question explicitly asks for them.
-verdict:
-- "correct": mathematically equivalent to the reference. Sensible rounding is fine unless an exact value or a specific precision is required.
-- "partial": right value but the question explicitly demands a form that isn't met (factorised, developed, exact value, rounding to a given precision, irreducible fraction…), or some solutions missing.
-- "incorrect": mathematically different.
-An automatic equivalence checker said: "${local}" (correct = proven equal in value, different = readable but not equal, unknown = could not read). Trust it on values, but you decide about required forms.
+      system: `You grade a student's answer to one part of an official math exercise (French school). The answer frame has ${fields.length} box(es); you get each box's expected content, the student's entry and an automatic check.
+Judge the MATHEMATICS, never the formatting. Accept any equivalent way of writing it: decimal comma or point, fraction vs decimal, solutions in any order, "x=2 ou x=3" / "S={2;3}", with or without "x =", plain-text math (sqrt(2), x^2, x⁵, 2pi), LaTeX, any correct set notation (ℝ∖{3} = ]-∞;3[∪]3;+∞[), with or without units unless the question explicitly asks for them.
+Grade each box in "fields" (same order). verdict:
+- "correct": every box is mathematically right. Sensible rounding is fine unless an exact value or a precision is required.
+- "partial": some boxes right and some wrong, or a value is right but the question demands a form that isn't met (factorised, developed, exact value, rounding…), or some solutions/elements are missing.
+- "incorrect": nothing right.
+The automatic check per box means: correct = proven equal, different = readable but not equal, unknown = could not read. Trust it on values; you decide about required forms, texte boxes and unreadable entries.
 Feedback is written by Léo, the student's coach:
 ${COACH_VOICE}
-If the student showed work, find the FIRST wrong step and point to it precisely (use an arrow to show where it went off track). Feedback is 1-3 short sentences, specific, honest, encouraging. If correct, say briefly what they did well.
-NEVER reveal the reference answer, nor the result of the step they got wrong. Write feedback in ${langOf(sheet)}.`,
-      content: [{ type: "text", text: JSON.stringify({ statement: ex.statement, figure: ex.figure, question: part.prompt, referenceAnswer: part.answer, referenceSolution: part.steps || part.solution, studentAnswer: answer, studentWork: work || "(pas de calculs montrés)" }, null, 2) }],
+If several boxes, say which one is off (by its label). If the student showed work, find the FIRST wrong step and point to it precisely (use an arrow). Feedback is 1-3 short sentences, specific, honest, encouraging. If correct, say briefly what they did well.
+NEVER reveal the expected answers, nor the result of the step they got wrong. Write feedback in ${langOf(sheet)}.`,
+      content: [{ type: "text", text: JSON.stringify({ statement: ex.statement, figure: ex.figure, question: part.prompt, referenceSolution: part.steps || part.solution,
+        boxes: fields.map((f, k) => ({ label: f.label, kind: f.kind, expected: f.answer, formMatters: !!f.formMatters, student: answers[k], automaticCheck: local[k] })),
+        studentWork: work || "(pas de calculs montrés)" }, null, 2) }],
       schema: GRADE_SCHEMA,
     });
-  } else if (local === "unknown" || (part.formMatters && !ex.demo)) {
-    throw httpError(422, part.formMatters && !ex.demo
-      ? "Cette question demande une forme précise : ajoute ta clé Anthropic (Réglages → Clés) pour la correction."
-      : "Je n'arrive pas à lire ta réponse. Écris-la par exemple : x = 3/2, 2,5, S = {1 ; 4} ou 30x − 1200.");
+  } else if (local.some((v, k) => v === "unknown" || (fields[k].formMatters && !ex.demo))) {
+    const k = local.findIndex((v, j) => v === "unknown" || (fields[j].formMatters && !ex.demo));
+    throw httpError(422, fields[k].formMatters || fields[k].kind === "texte"
+      ? `${name(fields[k])} demande une correction détaillée : ajoute ta clé Anthropic (Réglages → Clés).`
+      : fields[k].kind === "ensemble"
+        ? `Je n'arrive pas à lire ${name(fields[k])}. Écris un ensemble, par exemple : ]2 ; +∞[, ℝ∖{3}, [0 ; 1] ∪ [4 ; 5] ou {1 ; 4}.`
+        : `Je n'arrive pas à lire ${name(fields[k])}. Écris-la par exemple : x = 3/2, 2,5, x⁵ ou 30x − 1200.`);
   } else {
-    g = { verdict: local === "correct" ? "correct" : "incorrect", mistakeType: "calcul",
-      feedback: "Hmm, ce n'est pas la bonne valeur. Reprends ton calcul étape par étape → ou prends un indice, c'est fait pour ça 😉" };
+    const ok = local.map((v) => v === "correct");
+    const all = ok.every(Boolean), some = ok.some(Boolean);
+    g = { verdict: all ? "correct" : some ? "partial" : "incorrect", fields: ok.map((o) => ({ ok: o })), mistakeType: "calcul",
+      feedback: all ? cheers[0] : fields.length > 1 && some
+        ? `Bien sur ${fields.filter((_, k) => ok[k]).map(mathName).join(" et ")} ✓ → reprends ${fields.filter((_, k) => !ok[k]).map(mathName).join(" et ")}, il y a une erreur.`
+        : "Hmm, ce n'est pas la bonne valeur. Reprends ton calcul étape par étape → ou prends un indice, c'est fait pour ça 😉" };
   }
 
   await reload();
@@ -411,6 +459,8 @@ NEVER reveal the reference answer, nor the result of the step they got wrong. Wr
   const st = ex.state[i];
   st.attempts++;
   st.feedback = { verdict: g.verdict, text: g.feedback };
+  st.fieldsOk = fields.map((_, k) => !!g.fields?.[k]?.ok);
+  st.lastAnswers = answers;
   let reward = null;
   if (g.verdict === "correct") {
     st.solved = true;
@@ -565,7 +615,7 @@ function demoSheet() {
     figure: "",
     coachIntro: "Imagine que c'est ton atelier 🪵 Chaque support vendu te rapporte un peu d'argent, mais le loyer et les machines coûtent 1 200 € même si tu ne vends rien. On va trouver → combien tu gagnes par support → combien il en faut pour ne plus perdre d'argent.",
     parts: [
-      { label: "a)", prompt: "Exprimer le bénéfice mensuel $B(x)$ en fonction du nombre $x$ de supports vendus.", accept: ["30*x-1200"], formMatters: false,
+      { label: "a)", prompt: "Exprimer le bénéfice mensuel $B(x)$ en fonction du nombre $x$ de supports vendus.", fields: [{ label: "$B(x) =$", kind: "expression", hint: "une expression en fonction de x", answer: "30x - 1\\,200", accept: ["30*x-1200"], formMatters: false }],
         answer: "$B(x) = 30x - 1\\,200$",
         hints: ["Le bénéfice, c'est ce qui reste dans ta poche : l'argent qui rentre − l'argent qui sort. Qu'est-ce qui dépend du nombre de supports vendus, et qu'est-ce qui ne bouge jamais ?", "Argent qui rentre → $48$ € par support, donc $48x$. Argent qui sort → $1\\,200$ € fixes + $18$ € par support.", "Ça donne $B(x) = 48x - (1\\,200 + 18x)$. Attention aux parenthèses → il te reste juste à simplifier 😉"],
         steps: [
@@ -575,7 +625,7 @@ function demoSheet() {
           { say: "On regroupe les $x$ : 48 − 18 = 30 € qui restent par support → c'est ta marge.", math: "B(x) = 30x - 1\\,200" },
         ],
         commonMistake: "Oublier les parenthèses et écrire $48x - 1\\,200 + 18x$ → le coût du bois devient un gain !" },
-      { label: "b)", prompt: "Combien de supports faut-il vendre par mois pour atteindre le seuil de rentabilité ?", accept: ["40"], formMatters: false,
+      { label: "b)", prompt: "Combien de supports faut-il vendre par mois pour atteindre le seuil de rentabilité ?", fields: [{ label: "$x =$", kind: "nombre", hint: "un nombre de supports", answer: "40", accept: ["40"], formMatters: false }],
         answer: "$x = 40$",
         hints: ["Le seuil de rentabilité, c'est le moment pile où tu ne perds plus rien… mais où tu ne gagnes encore rien non plus. Ça veut dire quoi pour $B(x)$ ?", "Bénéfice nul → résous $B(x) = 0$ avec ta formule du a).", "$30x - 1\\,200 = 0$ → passe le $1\\,200$ de l'autre côté. Combien de fois 30 € pour remplir 1 200 € ?"],
         steps: [
@@ -585,6 +635,20 @@ function demoSheet() {
           { say: "Donc 40 supports par mois. Le 41ᵉ, c'est ton premier vrai bénéfice 🎉", math: "" },
         ],
         commonMistake: "Diviser 1 200 par 48 (le prix de vente) au lieu de 30 (ce qu'il te reste vraiment par support)." },
+      { label: "c)", prompt: "Résoudre $B(x) > 0$ dans $\\mathbb{R}$. En déduire le nombre minimal de supports à vendre pour être bénéficiaire.",
+        fields: [
+          { label: "$S =$", kind: "ensemble", hint: "un intervalle", answer: "]40\\,;+\\infty[", accept: ["]40;+inf["], formMatters: false },
+          { label: "$n_{\\min} =$", kind: "nombre", hint: "un nombre entier de supports", answer: "41", accept: ["41"], formMatters: false },
+        ],
+        answer: "$S = ]40\\,;+\\infty[$ et $n_{\\min} = 41$",
+        hints: ["Bénéficiaire → le bénéfice doit être STRICTEMENT positif, pas juste nul. Ça change tout pour la borne !", "Résous $30x - 1\\,200 > 0$ comme une équation, en gardant le signe $>$ (30 est positif → le sens ne bouge pas).", "Tu trouves $x > 40$ → écris-le avec un intervalle (crochet ouvert ou fermé en 40 ?). Puis : quel est le premier nombre ENTIER de supports au-dessus ?"],
+        steps: [
+          { say: "On veut un bénéfice strictement positif :", math: "30x - 1\\,200 > 0" },
+          { say: "On isole $x$ → on ajoute 1 200, puis on divise par 30 (positif → le sens reste le même) :", math: "x > 40" },
+          { say: "En ensemble : tous les réels strictement plus grands que 40 → crochet OUVERT en 40, et toujours ouvert vers $+\\infty$.", math: "S = \\left]40\\,;+\\infty\\right[" },
+          { say: "Mais on vend des supports entiers → le premier entier de $S$, c'est 41 🎉", math: "n_{\\min} = 41" },
+        ],
+        commonMistake: "Fermer le crochet en 40 : avec 40 supports, le bénéfice vaut 0 → tu n'es pas encore bénéficiaire." },
     ],
     businessLens: { concept: "Seuil de rentabilité et marge sur coût variable", scenario: "Toute entreprise qui vend un produit vit avec cette équation. Si un sweat te coûte 18 € à fabriquer et que tu le vends 45 €, chaque vente rapporte 27 € pour couvrir tes charges fixes (pub, site, design). Avec 810 € de charges fixes par mois, il te faut 30 ventes rien que pour ne plus perdre d'argent — la 31ᵉ est ton premier vrai bénéfice.", takeaway: "Connais ta marge par unité et tes charges fixes, et tu sais exactement combien de ventes il te faut." },
   };

@@ -166,8 +166,6 @@ button:disabled { opacity: .65; cursor: wait; transform: none !important; }
 .part-head { display: flex; gap: 14px; align-items: flex-start; }
 .part-head .md { flex: 1; font-size: 16px; padding-top: 4px; }
 .label { display: grid; place-items: center; min-width: 36px; height: 36px; border-radius: 11px; background: var(--orange-50); color: var(--orange-600); font-weight: 800; }
-.answer-row { display: flex; gap: 10px; }
-.answer-row .ans { flex: 1; }
 .sym { display: flex; gap: 6px; flex-wrap: wrap; }
 .sym button { background: var(--surface); border: 1px solid var(--line); color: var(--text); border-radius: 10px; min-width: 36px; height: 34px; cursor: pointer; font-size: 15px; box-shadow: inset 0 -2px 0 rgba(24, 32, 58, .05); transition: .12s; }
 .sym button:hover { border-color: var(--blue); color: var(--blue); transform: translateY(-1px); }
@@ -381,7 +379,8 @@ select { margin: 6px 0 14px; }
   .ladder li span:last-child { grid-column: 1 / -1; }
   .keyrow { flex-wrap: wrap; }
   #toasts { left: 16px; right: 16px; top: 70px; bottom: auto; }
-  .answer-row { flex-direction: column; }
+  .field-row { flex-wrap: wrap; }
+  .flabel { min-width: 0; }
 }
 
 /* Logged out: no navigation chrome around the login screen */
@@ -420,3 +419,27 @@ body.out .sidebar, body.out .topbar, body.out .tabbar { display: none; }
 .notes-box[open] .chev { transform: rotate(180deg); }
 .notes-box textarea { font-family: "MathX", "JetBrains Mono", monospace; display: block; border: none; border-top: 1px dashed var(--line); border-radius: 0; box-shadow: none; min-height: 150px; line-height: 1.7; background: repeating-linear-gradient(transparent 0 calc(1.7em - 1px), #eef1f8 calc(1.7em - 1px) 1.7em); background-attachment: local; padding: 10px 14px; }
 .notes-box textarea:focus { box-shadow: none; }
+
+/* Answer frame: one line per thing to hand in */
+.fields { display: flex; flex-direction: column; gap: 10px; }
+.field-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 14px; background: var(--surface-2); border: 1.5px solid var(--line); transition: border-color .2s, background .2s; }
+.field-row:focus-within { border-color: #cddcff; background: var(--surface); }
+.field-row.kind-ensemble { background: color-mix(in srgb, var(--purple) 6%, #fff); border-color: color-mix(in srgb, var(--purple) 28%, var(--line)); }
+.field-row.ok { background: var(--good-50); border-color: #bfe9d8; }
+.field-row.ko { background: var(--bad-50); border-color: #f8c7d3; }
+.flabel { min-width: 64px; font-weight: 700; font-size: 16px; white-space: nowrap; }
+.fbox { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.fbox .ans { background: var(--surface); }
+.fhint { font-size: 12px; font-weight: 600; color: var(--muted); padding-left: 4px; }
+.kind-ensemble .fhint { color: var(--purple); }
+.fmark { flex: none; width: 30px; height: 30px; border-radius: 10px; display: grid; place-items: center; color: #fff; font-weight: 800; }
+.fmark.good { background: var(--good); } .fmark.bad { background: var(--bad); }
+.final-rows { display: flex; flex-direction: column; gap: 4px; }
+
+/* Keyboard follows the line you are typing in: calcul + puissances, or ensembles only, or everything (notes / ⋯) */
+.sym[data-mode="expr"] [data-g="set"] { display: none; }
+.sym[data-mode="set"] [data-g="calc"], .sym[data-mode="set"] [data-g="pow"], .sym[data-mode="set"] .sep[data-g="set"] { display: none; }
+.sym .sep { width: 1px; align-self: stretch; margin: 2px 4px; background: var(--line); }
+.sym button.sup { font-size: 17px; font-weight: 700; }
+.sym button[data-g="set"] { background: color-mix(in srgb, var(--purple) 7%, #fff); border-color: color-mix(in srgb, var(--purple) 22%, var(--line)); font-size: 15px; }
+.sym .more { color: var(--muted); font-weight: 800; }
